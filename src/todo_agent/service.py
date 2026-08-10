@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from todo_agent.errors import ItemNotFoundError, TodoError, UnknownFunctionError, ValidationError
+from todo_agent.errors import TodoError, UnknownFunctionError, ValidationError
 from todo_agent.models import (
     DEFAULT_PRIORITY,
     MAX_PRIORITY,
@@ -41,11 +41,7 @@ def _optional_str(invocation: ToolInvocation, name: str) -> str | None:
 
 
 def _optional_priority(invocation: ToolInvocation) -> int:
-    """Return the priority argument, defaulting when the model omits it.
-
-    The gateway preserves the JSON type declared in the tool schema, so this
-    usually arrives as an int — but it accepts a numeric string too.
-    """
+    """Return the priority argument, defaulting when omitted. Accepts int or numeric string."""
     raw = invocation.arguments.get("priority")
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return DEFAULT_PRIORITY
@@ -90,12 +86,7 @@ def list_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
 
 
 def search_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
-    """Return items whose text matches the query.
-
-    This is how the model obtains an `item_id`: `update_item` and `delete_item`
-    take ids only, so a request phrased in natural language has to come through
-    here first.
-    """
+    """Return items whose text matches the query — the model's only source of `item_id`."""
     matches = store.search(
         user_id=invocation.user_id,
         query=_require_str(invocation, "query"),
@@ -147,16 +138,10 @@ TOOL_NAMES = frozenset(_HANDLERS)
 
 
 class TodoService:
-    """Entry point for the gateway target, wired once per Lambda container.
+    """Dispatches one gateway tool call, holding the store across invocations.
 
-    Responsibilities:
-      - hold the DynamoDB-backed store across invocations (cold start cost paid once)
-      - dispatch one gateway tool call to its handler
-      - turn failures into a result the model can read and act on
-
-    The gateway passes the return value straight back to the model as the tool
-    result — there is no response envelope and no status flag — so an error is
-    reported as an ordinary result carrying an `error` key.
+    The return value reaches the model unchanged and the contract has no status
+    flag, so failures come back as an ordinary result with an `error` key.
     """
 
     _store: TodoStore | None = None
@@ -187,11 +172,8 @@ class TodoService:
 
         try:
             return handler(cls._store, invocation)
-        except (ValidationError, ItemNotFoundError) as e:
-            # Recoverable: the model can fix its arguments and call again.
-            logger.warning("Rejected tool call", extra={"tool": invocation.tool_name, "error": str(e)})
-            return {"error": str(e)}
         except TodoError as e:
+            # Recoverable: the message names the problem, the model retries.
             logger.warning("Rejected tool call", extra={"tool": invocation.tool_name, "error": str(e)})
             return {"error": str(e)}
         except Exception as e:

@@ -19,7 +19,7 @@ data "archive_file" "lambda" {
 }
 
 resource "aws_lambda_function" "todo" {
-  function_name    = "${var.project_name}-action-group"
+  function_name    = "${var.project_name}-tools"
   role             = aws_iam_role.lambda.arn
   handler          = "todo_agent.lambda_handler.lambda_handler"
   runtime          = var.lambda_runtime
@@ -40,7 +40,7 @@ resource "aws_lambda_function" "todo" {
 
 # Declared explicitly so retention is managed rather than "never expire".
 resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${var.project_name}-action-group"
+  name              = "/aws/lambda/${var.project_name}-tools"
   retention_in_days = var.log_retention_days
 }
 

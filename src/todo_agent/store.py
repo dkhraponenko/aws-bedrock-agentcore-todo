@@ -37,15 +37,11 @@ def _from_attribute_map(attributes: dict[str, Any]) -> dict[str, Any]:
 
 
 class DynamoDBClient(Protocol):
-    """The five DynamoDB calls this store makes.
+    """The five DynamoDB calls this store makes, and the exact set iam.tf grants.
 
-    Structural typing keeps the seam honest: it matches the real boto3 client,
-    a `MagicMock(spec=...)`, and moto's client alike, and it documents the
-    exact permission set `infrastructure/iam.tf` has to grant.
+    Structural, so the real client, `MagicMock(spec=...)` and moto all fit.
     """
 
-    # The kwargs mirror the botocore request shapes, which are genuinely
-    # dynamic; narrowing them here would only restate botocore's own model.
     def put_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
 
     def get_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
@@ -58,11 +54,9 @@ class DynamoDBClient(Protocol):
 
 
 class TodoStore:
-    """Reads and writes todo items in a single-table DynamoDB layout.
+    """Single-table access keyed by `user_id` (partition) and `item_id` (sort).
 
-    Every item is keyed by `user_id` (partition) and `item_id` (sort), so each
-    user's list lives in one partition and every read is a Query — there is no
-    code path in this class that Scans the table.
+    Every read is a Query; nothing here Scans.
     """
 
     def __init__(self, table_name: str = "", dynamodb_client: DynamoDBClient | None = None) -> None:
@@ -103,11 +97,10 @@ class TodoStore:
     def search(self, user_id: str, query: str, status: TodoStatus | None = None) -> list[TodoItem]:
         """Return items whose text contains `query`, case-insensitively.
 
-        The status filter is pushed down to DynamoDB as a FilterExpression.
-        The text match is applied here instead: DynamoDB's `contains()` is
-        case-sensitive, and a user asking for "milk" expects to find "Buy Milk".
-        Filtering in the Lambda is safe because the Query is already scoped to
-        one user's partition.
+        Status is pushed down as a FilterExpression; the text match stays here
+        because DynamoDB's `contains()` is case-sensitive and "milk" should
+        find "Buy Milk". Safe to do in-process: the Query is already scoped to
+        one partition.
         """
         needle = query.casefold()
         return [item for item in self._query(user_id, status) if needle in item.text.casefold()]

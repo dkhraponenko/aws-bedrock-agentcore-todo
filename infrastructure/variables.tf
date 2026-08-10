@@ -12,24 +12,23 @@ variable "aws_region" {
 
 variable "agent_model" {
   description = <<-EOT
-    Foundation model the agent reasons with. Current Claude models on Bedrock
-    are only reachable through a cross-region inference profile, hence the
-    "us." prefix. Change the prefix together with aws_region (eu.* for EU
+    Foundation model the agent reasons with, as a cross-region inference
+    profile. Change the "us." prefix together with aws_region (eu.* for EU
     regions) and keep var.agent_base_model in sync.
   EOT
   type        = string
-  default     = "us.anthropic.claude-sonnet-5"
+  default     = "us.amazon.nova-pro-v1:0"
 }
 
 variable "agent_base_model" {
   description = <<-EOT
-    The plain foundation-model id behind var.agent_model. Invoking through an
-    inference profile requires bedrock:InvokeModel on the profile *and* on the
-    underlying model in every region the profile can route to, so this is
-    granted separately.
+    The plain foundation-model id behind var.agent_model. Invoking through a
+    profile requires bedrock:InvokeModel on the profile *and* on the underlying
+    model in every region the profile can route to, so this is granted
+    separately.
   EOT
   type        = string
-  default     = "anthropic.claude-sonnet-5"
+  default     = "amazon.nova-pro-v1:0"
 }
 
 variable "lambda_runtime" {

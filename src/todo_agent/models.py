@@ -109,11 +109,7 @@ class ToolInvocation:
 
     @classmethod
     def from_invocation(cls, event: dict[str, Any], context: Any) -> ToolInvocation:  # noqa: ANN401
-        """Parse the gateway's event and context into one invocation record.
-
-        `context` is the AWS-supplied LambdaContext; it is untyped at this
-        boundary, and only its `client_context.custom` map is read.
-        """
+        """Parse the gateway's event and untyped LambdaContext into one record."""
         client_context = getattr(context, "client_context", None)
         custom = getattr(client_context, "custom", None) or {}
         raw_name = str(custom.get(TOOL_NAME_KEY, ""))
@@ -122,8 +118,6 @@ class ToolInvocation:
             # Drop the target prefix: handlers key off the bare tool name.
             tool_name=raw_name.rpartition(TOOL_NAME_SEPARATOR)[2],
             arguments=dict(event or {}),
-            # AgentCore has no session-attribute channel, so every caller
-            # shares one list. See the README for what a real deployment
-            # would do instead.
+            # No identity channel in the invocation, so every caller shares one list.
             user_id=DEFAULT_USER_ID,
         )
