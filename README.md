@@ -5,32 +5,12 @@ A sentence like *"add a new item to the list, buy a milk"* becomes a tool call;
 the call travels through an **AgentCore Gateway** to a **Lambda**, which reads
 and writes **DynamoDB**. All infrastructure is Terraform.
 
-```
-  "delete buy a milk"
-          |
-          v
-  +-------------------+     managed orchestration loop: model,
-  |  AgentCore        |     system prompt, tools, max_iterations
-  |  harness (Claude) |
-  +---------+---------+
-            | bedrock-agentcore:InvokeGateway
-            v
-  +-------------------+     MCP facade; the tool contract the
-  |  AgentCore        |     model sees lives on the target
-  |  Gateway + target |
-  +---------+---------+
-            | lambda:InvokeFunction (gateway's own role)
-            v
-  +-------------------+     one tool call in, one JSON result out
-  |  Lambda           |
-  |  todo_agent       |
-  +---------+---------+
-            | Query / PutItem / UpdateItem / DeleteItem
-            v
-  +-------------------+     PK = user_id, SK = item_id
-  |  DynamoDB         |     one partition per user, no Scans
-  +-------------------+
-```
+<img src="docs/architecture.svg" alt="AgentCore harness and gateway in front of a Lambda and DynamoDB" width="900">
+
+Each hop is a separate IAM identity: the harness assumes its role to call the
+model and the gateway, the gateway assumes its own to invoke the Lambda, and
+the Lambda assumes a third to touch the table. No hop can reach past the next
+one.
 
 ## The five tools
 
@@ -141,6 +121,57 @@ Bedrock are only invokable via a cross-region inference profile, which is why
 `var.agent_model` carries the `us.` prefix and IAM grants the profile ARN
 *and* the underlying `foundation-model/*` ARN in every region the profile can
 route to.
+
+## What it costs
+
+Rates below are us-east-1 on-demand, pulled from the AWS Price List API on
+**9 August 2026** (`aws pricing get-products`), not from a pricing page.
+
+| Component | Unit rate |
+|---|---|
+| Nova Pro tokens | $0.80 / 1M in, $3.20 / 1M out |
+| Claude Sonnet 5 tokens | $3.00 / 1M in, $15.00 / 1M out — $2.00 / $10.00 introductory through 31 Aug 2026 |
+| AgentCore Gateway | $0.000005 per tool invocation |
+| AgentCore Gateway tool indexing | $0.0002 per tool per month |
+| AgentCore short-term memory | $0.00025 per event stored |
+| Lambda | $0.20 / 1M requests + $0.0000166667 per GB-second |
+| DynamoDB on-demand | $0.625 / 1M writes, $0.125 / 1M reads, $0.25 per GB-month |
+| CloudWatch Logs | $0.50 per GB ingested, $0.03 per GB-month stored |
+
+Costing one conversation: **10 user turns, one tool call each**. That is two
+model calls per turn (pick the tool, then answer from its result), ~25K input
+tokens in total because the system prompt and the five tool schemas are resent
+every call, and ~1.5K output tokens.
+
+| Line item | Quantity | Nova Pro |
+|---|---|---|
+| Model input | 25K tokens | $0.0200 |
+| Model output | 1.5K tokens | $0.0048 |
+| Memory events | ~40 | $0.0100 |
+| Gateway invocations | 10 | $0.0001 |
+| Lambda + DynamoDB + Logs | 10 calls | $0.0000 |
+| **Total** | | **~$0.035** |
+
+The same conversation on Claude Sonnet 5 is **~$0.075** at introductory rates
+and **~$0.11** after — the non-model half of the bill does not move.
+
+**Idle cost is effectively zero.** Everything except gateway tool indexing
+(5 tools × $0.0002 = **$0.001/month**) is billed per request, and a few KB in
+DynamoDB sits inside the always-free 25 GB. Leaving the stack deployed between
+demos costs a tenth of a cent a month; a `destroy`/`apply` cycle is not worth
+the trouble.
+
+Two things worth noticing in that table. **Memory is a third of the bill** —
+$0.00025 per event is small until you notice every user message, assistant
+message, tool call and tool result is one, so conversation length drives it
+quadratically alongside the resent context. And **the tool plumbing rounds to
+zero**: Lambda, DynamoDB and the gateway together cost less than 0.5% of a
+conversation. Tokens are the entire cost model here.
+
+One caveat: the Price List API has no separate SKU for harness orchestration,
+so the numbers above assume the loop itself is not billed beyond the model,
+gateway and memory usage it generates. Verify against a real bill before
+quoting these for anything that matters.
 
 ## Running it
 
