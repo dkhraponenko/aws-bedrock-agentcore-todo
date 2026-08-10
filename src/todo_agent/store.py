@@ -1,0 +1,205 @@
+"""DynamoDB persistence for todo items."""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import TYPE_CHECKING, Any, Protocol
+
+import boto3
+from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
+from todo_agent.errors import ItemNotFoundError
+from todo_agent.models import TodoItem, TodoStatus, new_item_id, utc_now
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+logger = logging.getLogger(__name__)
+
+TABLE_NAME = os.environ.get("TODO_TABLE_NAME", "")
+_CONDITION_FAILED = "ConditionalCheckFailedException"
+
+_serializer = TypeSerializer()
+_deserializer = TypeDeserializer()
+
+
+def _to_attribute_map(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: _serializer.serialize(value) for key, value in values.items()}
+
+
+def _from_attribute_map(attributes: dict[str, Any]) -> dict[str, Any]:
+    return {key: _deserializer.deserialize(value) for key, value in attributes.items()}
+
+
+class DynamoDBClient(Protocol):
+    """The five DynamoDB calls this store makes.
+
+    Structural typing keeps the seam honest: it matches the real boto3 client,
+    a `MagicMock(spec=...)`, and moto's client alike, and it documents the
+    exact permission set `infrastructure/iam.tf` has to grant.
+    """
+
+    # The kwargs mirror the botocore request shapes, which are genuinely
+    # dynamic; narrowing them here would only restate botocore's own model.
+    def put_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+    def get_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+    def query(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+    def update_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+    def delete_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+
+class TodoStore:
+    """Reads and writes todo items in a single-table DynamoDB layout.
+
+    Every item is keyed by `user_id` (partition) and `item_id` (sort), so each
+    user's list lives in one partition and every read is a Query — there is no
+    code path in this class that Scans the table.
+    """
+
+    def __init__(self, table_name: str = "", dynamodb_client: DynamoDBClient | None = None) -> None:
+        self.table_name = table_name or TABLE_NAME
+        self.client: DynamoDBClient = dynamodb_client or boto3.client(
+            "dynamodb",
+            config=Config(
+                connect_timeout=5,
+                read_timeout=10,
+                retries={"max_attempts": 2},
+            ),
+        )
+
+    def add(self, user_id: str, text: str, priority: int) -> TodoItem:
+        """Create a new item and return it."""
+        now = utc_now()
+        item = TodoItem(
+            user_id=user_id,
+            item_id=new_item_id(),
+            text=text,
+            status=TodoStatus.PENDING,
+            priority=priority,
+            created_at=now,
+            updated_at=now,
+        )
+        self.client.put_item(
+            TableName=self.table_name,
+            Item=_to_attribute_map(item.to_dynamodb()),
+            ConditionExpression="attribute_not_exists(item_id)",
+        )
+        logger.info("Created item", extra={"item_id": item.item_id, "user_id": user_id})
+        return item
+
+    def list_all(self, user_id: str, status: TodoStatus | None = None) -> list[TodoItem]:
+        """Return every item for a user, oldest first, optionally by status."""
+        return list(self._query(user_id, status))
+
+    def search(self, user_id: str, query: str, status: TodoStatus | None = None) -> list[TodoItem]:
+        """Return items whose text contains `query`, case-insensitively.
+
+        The status filter is pushed down to DynamoDB as a FilterExpression.
+        The text match is applied here instead: DynamoDB's `contains()` is
+        case-sensitive, and a user asking for "milk" expects to find "Buy Milk".
+        Filtering in the Lambda is safe because the Query is already scoped to
+        one user's partition.
+        """
+        needle = query.casefold()
+        return [item for item in self._query(user_id, status) if needle in item.text.casefold()]
+
+    def get(self, user_id: str, item_id: str) -> TodoItem:
+        """Return a single item, or raise `ItemNotFoundError`."""
+        response = self.client.get_item(
+            TableName=self.table_name,
+            Key=_to_attribute_map({"user_id": user_id, "item_id": item_id}),
+        )
+        raw = response.get("Item")
+        if not raw:
+            raise ItemNotFoundError(item_id)
+        return TodoItem.from_dynamodb(_from_attribute_map(raw))
+
+    def update(
+        self,
+        user_id: str,
+        item_id: str,
+        text: str | None = None,
+        status: TodoStatus | None = None,
+    ) -> TodoItem:
+        """Apply a partial update and return the resulting item."""
+        assignments = ["updated_at = :updated_at"]
+        values: dict[str, Any] = {":updated_at": utc_now()}
+        names: dict[str, str] = {}
+
+        if text is not None:
+            assignments.append("#text = :text")
+            names["#text"] = "text"
+            values[":text"] = text
+        if status is not None:
+            assignments.append("#status = :status")
+            names["#status"] = "status"
+            values[":status"] = str(status)
+
+        update_kwargs: dict[str, Any] = {
+            "TableName": self.table_name,
+            "Key": _to_attribute_map({"user_id": user_id, "item_id": item_id}),
+            "UpdateExpression": "SET " + ", ".join(assignments),
+            "ExpressionAttributeValues": _to_attribute_map(values),
+            "ConditionExpression": "attribute_exists(item_id)",
+            "ReturnValues": "ALL_NEW",
+        }
+        if names:
+            update_kwargs["ExpressionAttributeNames"] = names
+
+        try:
+            response = self.client.update_item(**update_kwargs)
+        except ClientError as e:
+            self._raise_if_missing(e, item_id)
+            raise
+        return TodoItem.from_dynamodb(_from_attribute_map(response["Attributes"]))
+
+    def delete(self, user_id: str, item_id: str) -> TodoItem:
+        """Delete an item and return what was deleted."""
+        try:
+            response = self.client.delete_item(
+                TableName=self.table_name,
+                Key=_to_attribute_map({"user_id": user_id, "item_id": item_id}),
+                ConditionExpression="attribute_exists(item_id)",
+                ReturnValues="ALL_OLD",
+            )
+        except ClientError as e:
+            self._raise_if_missing(e, item_id)
+            raise
+        return TodoItem.from_dynamodb(_from_attribute_map(response["Attributes"]))
+
+    def _query(self, user_id: str, status: TodoStatus | None) -> Iterator[TodoItem]:
+        """Page through one user's partition, applying an optional status filter."""
+        query_kwargs: dict[str, Any] = {
+            "TableName": self.table_name,
+            "KeyConditionExpression": "user_id = :user_id",
+            "ExpressionAttributeValues": {":user_id": _serializer.serialize(user_id)},
+        }
+        if status is not None:
+            query_kwargs["FilterExpression"] = "#status = :status"
+            query_kwargs["ExpressionAttributeNames"] = {"#status": "status"}
+            query_kwargs["ExpressionAttributeValues"][":status"] = _serializer.serialize(str(status))
+
+        while True:
+            response = self.client.query(**query_kwargs)
+            for raw in response.get("Items", []):
+                yield TodoItem.from_dynamodb(_from_attribute_map(raw))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                return
+            query_kwargs["ExclusiveStartKey"] = last_key
+
+    @staticmethod
+    def _raise_if_missing(error: ClientError, item_id: str) -> None:
+        """Translate a failed condition check into a domain error."""
+        code = error.response.get("Error", {}).get("Code", "Unknown")
+        if code == _CONDITION_FAILED:
+            raise ItemNotFoundError(item_id) from error

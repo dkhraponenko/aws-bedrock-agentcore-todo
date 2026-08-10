@@ -1,0 +1,103 @@
+[project]
+name = "todo-agent"
+version = "0.1.0"
+description = "Agent tools backing a DynamoDB-stored todo list"
+requires-python = ">=3.13"
+# The Lambda runtime already ships boto3, and nothing else is imported at
+# runtime — so the deployment package is just the source tree.
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "boto3>=1.35",
+  "moto[dynamodb]>=5.0",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "pytest-env>=1.1",
+  "ruff>=0.8",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+indent-width = 4
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+extend-select = [
+  "W", "C90", "I", "N", "UP", "ANN", "ASYNC", "S", "BLE", "B", "A", "COM", "C4",
+  "DTZ", "T10", "EM", "EXE", "FA", "ISC", "ICN", "G", "INP", "PIE", "PT", "Q",
+  "RSE", "RET", "SIM", "TID", "TCH", "ARG", "PTH", "PL", "TRY", "FLY", "PERF",
+  "FURB", "LOG", "RUF",
+]
+ignore = ["ISC001", "COM812"]
+fixable = ["ALL"]
+preview = true
+
+[tool.ruff.lint.per-file-ignores]
+# S101/PLR2004: bare asserts and literal expectations are the point of a test.
+# PLR6301:      test methods grouped in a class never use self.
+# ANN401:       **overrides on the test data factories is genuinely dynamic.
+# ARG001:       fixtures requested purely for their side effects (aws_credentials).
+"tests/**" = ["S101", "PLR2004", "PLR6301", "ANN401", "ARG001"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-branches = 12
+max-locals = 15
+max-statements = 50
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+ignore_missing_imports = true
+follow_imports = "silent"
+no_implicit_optional = true
+strict_optional = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+allow_untyped_globals = false
+allow_redefinition = false
+strict_equality = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+# "." so tests can import the plain helper functions out of tests/conftest.py.
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "-m 'not e2e' --strict-markers"
+markers = ["e2e: hits real AWS; excluded from the default run"]
+
+[tool.pytest_env]
+AWS_DEFAULT_REGION = "us-east-1"
+TODO_TABLE_NAME = "todo-agent-items-test"
+
+[tool.coverage.run]
+source = ["src/todo_agent"]
