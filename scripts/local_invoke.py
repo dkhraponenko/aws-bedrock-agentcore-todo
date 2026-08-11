@@ -6,7 +6,7 @@ client context are built exactly as AgentCore Gateway would send them. What it
 proves is the half of the system the unit tests do not reach end to end — the
 invocation contract, dispatch, validation and persistence in one pass.
 
-    PYTHONPATH=src python scripts/local_invoke.py
+    python scripts/local_invoke.py
 """
 
 from __future__ import annotations
@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+# src/ is a source root, not an installed package: the deployment artifact is
+# the source tree itself, so there is no editable install to lean on.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Set before todo_agent is imported: the handler builds its store at import
 # time, and boto3 refuses to create a client without a region.

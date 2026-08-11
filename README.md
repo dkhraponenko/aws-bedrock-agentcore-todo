@@ -221,7 +221,7 @@ bound.
 Most of the stack can be exercised before anything exists in AWS.
 
 ```bash
-PYTHONPATH=src python scripts/local_invoke.py
+python scripts/local_invoke.py
 ```
 
 Offline, no credentials: builds the event and `client_context` the gateway
@@ -230,7 +230,7 @@ would send, runs both the happy path and the rejection cases through the real
 contract, dispatch, validation and persistence — everything below the model.
 
 ```bash
-AWS_PROFILE=... PYTHONPATH=src python scripts/local_agent.py
+AWS_PROFILE=... python scripts/local_agent.py
 ```
 
 Replaces the harness with a Converse tool-use loop reading the same

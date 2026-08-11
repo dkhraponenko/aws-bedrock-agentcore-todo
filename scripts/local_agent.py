@@ -7,7 +7,7 @@ infrastructure/agent_instruction.md — the same bytes Terraform publishes — s
 this exercises what unit tests cannot: whether the model picks the right tool
 and resolves wording to an item_id before deleting.
 
-    AWS_PROFILE=personal PYTHONPATH=src python scripts/local_agent.py
+    AWS_PROFILE=personal python scripts/local_agent.py
 
 Needs credentials and costs a few cents per conversation; it deploys nothing.
 DynamoDB is moto in-process, with Bedrock allowed through by URL, because moto
@@ -30,6 +30,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 
+# src/ is a source root, not an installed package: the deployment artifact is
+# the source tree itself, so there is no editable install to lean on.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# Set before todo_agent is imported: the handler builds its store at import
+# time, and boto3 refuses to create a client without a region.
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 
 import boto3
