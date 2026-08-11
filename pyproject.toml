@@ -12,10 +12,13 @@ dev = [
   "boto3>=1.35",
   "moto[dynamodb]>=5.0",
   "mypy>=1.13",
+  "pre-commit>=4.0",
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "pytest-env>=1.1",
-  "ruff>=0.8",
+  # Upper-bounded: 0.16 rewrites `# noqa:` suppressions into a new syntax the
+  # pinned pre-commit hook would then have to match. Bump both together.
+  "ruff>=0.15,<0.16",
 ]
 
 [tool.ruff]
@@ -92,7 +95,9 @@ show_error_codes = true
 # "." so tests can import the plain helper functions out of tests/conftest.py.
 pythonpath = ["src", "."]
 testpaths = ["tests"]
-addopts = "-m 'not e2e' --strict-markers"
+# --cov here rather than only in CI: the coverage gate is part of "the tests
+# pass", and a threshold nobody runs locally is a threshold that drifts.
+addopts = "-m 'not e2e' --strict-markers --cov"
 markers = ["e2e: hits real AWS; excluded from the default run"]
 
 [tool.pytest_env]
@@ -100,4 +105,21 @@ AWS_DEFAULT_REGION = "us-east-1"
 TODO_TABLE_NAME = "todo-agent-items-test"
 
 [tool.coverage.run]
+# Only the deployment package. scripts/ is developer tooling that no test
+# imports; counting it would report a number about the wrong code.
 source = ["src/todo_agent"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# The handler is small enough that a real gap is a missing test, not noise —
+# so this sits just under the current number rather than at a token 80.
+fail_under = 95
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  'if __name__ == "__main__":',
+  "raise NotImplementedError",
+  "\\.\\.\\.",
+]

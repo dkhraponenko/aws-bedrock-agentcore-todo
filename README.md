@@ -185,11 +185,12 @@ tests/                unit tests on mocks, integration tests on moto
 
 ```bash
 python -m venv .venv && .venv/bin/pip install \
-  pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy ruff
+  pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy 'ruff<0.16' pre-commit
 
-ruff check . && ruff format --check .
-.venv/bin/mypy src scripts tests
-.venv/bin/pytest --cov
+pre-commit install --install-hooks && pre-commit install --hook-type pre-push
+pre-commit run --all-files    # everything the hooks enforce, in one go
+
+.venv/bin/pytest              # tests + the coverage gate
 
 cd infrastructure
 terraform init
@@ -197,6 +198,21 @@ terraform validate        # no credentials needed; plan and apply need them
 terraform apply
 eval "$(terraform output -raw chat_command)"
 ```
+
+### What the hooks enforce
+
+On commit: ruff (lint and format), mypy, `terraform fmt` and `terraform
+validate`, plus the hygiene set — JSON and TOML parse, `tools.json` stays
+canonically formatted, no private keys, no leftover `breakpoint()`. On push:
+the test suite with a **95% branch-coverage floor** over `src/todo_agent`
+(currently 99%). `scripts/` is excluded from coverage on purpose — no test
+imports it, so counting it would report a number about the wrong code.
+
+Hook revisions are pinned, and the ruff pin has to match the ruff you run
+locally: 0.16 rewrites `# noqa: RULE` into a new `# ruff: ignore[rule-name]`
+syntax that older ruff rejects, so a floating hook would leave the repo in a
+state its own CLI fails on. `pyproject.toml` carries the matching `<0.16`
+bound.
 
 ### Verifying without deploying
 
@@ -236,8 +252,9 @@ entitlement, region, IAM and agreement as four separate flags.
   `user_id` is a constant. Doing it properly means either an extra tool
   parameter (which the model should not be choosing) or `CUSTOM_JWT` inbound
   auth with the identity forwarded to the target.
-- **No CI.** `ruff`, `mypy` and `pytest` are configured but not wired to a
-  workflow.
+- **No CI.** The pre-commit hooks are the whole enforcement story; nothing runs
+  them on a server, so a `--no-verify` commit goes unchallenged. The hook set
+  is written to be a GitHub Actions job unchanged when that matters.
 - **No remote state.** Local state is fine for one operator and wrong for a
   team.
 - **Memory is whatever AgentCore creates by default.** No explicit
