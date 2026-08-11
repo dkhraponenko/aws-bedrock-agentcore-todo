@@ -179,6 +179,8 @@ scripts/
   local_invoke.py     the same Lambda, driven offline through a fake gateway event
   local_agent.py      the agent loop locally: real model, mocked everything else
 tests/                unit tests on mocks, integration tests on moto
+docs/architecture.svg the diagram above; service glyphs are the official
+                      AWS Architecture Icons, inlined unmodified
 ```
 
 ## Running it
