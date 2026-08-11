@@ -5,7 +5,7 @@ to the list, buy a milk"* becomes a tool call that travels through an
 **AgentCore Gateway** to a **Lambda**, which reads and writes **DynamoDB**.
 Everything is Terraform.
 
-<img src="docs/architecture.svg" alt="AgentCore harness and gateway in front of a Lambda and DynamoDB" width="900">
+<img src="docs/architecture.svg" alt="AgentCore harness and gateway in front of a Lambda and DynamoDB" width="1000">
 
 Each hop is a separate IAM identity: the harness assumes its role to call the
 model and the gateway, the gateway assumes its own to invoke the Lambda, the
