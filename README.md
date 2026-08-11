@@ -176,7 +176,6 @@ src/todo_agent/       Lambda source — this directory is the deployment package
 
 scripts/
   chat.py             interactive InvokeHarness client against the deployed stack
-  local_invoke.py     the same Lambda, driven offline through a fake gateway event
   local_agent.py      the agent loop locally: real model, mocked everything else
 tests/                unit tests on mocks, integration tests on moto
 docs/architecture.svg the diagram above; service glyphs are the official
@@ -220,14 +219,14 @@ bound.
 
 Most of the stack can be exercised before anything exists in AWS.
 
-```bash
-python scripts/local_invoke.py
-```
+Everything below the model is the test suite's job, offline and without
+credentials. `tests/unit/test_tool_contract.py` reads `tools.json` and drives
+the real `lambda_handler` on moto through the `(event, client_context)` pair
+the gateway would deliver, omitting each declared-required property in turn —
+so a `required` flag that `service.py` does not actually enforce fails the
+build. `terraform validate` covers the HCL with no credentials either.
 
-Offline, no credentials: builds the event and `client_context` the gateway
-would send, runs both the happy path and the rejection cases through the real
-`lambda_handler`, and stores the results in moto. Covers the invocation
-contract, dispatch, validation and persistence — everything below the model.
+That leaves the model itself:
 
 ```bash
 AWS_PROFILE=... python scripts/local_agent.py
