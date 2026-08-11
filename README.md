@@ -13,8 +13,10 @@ Lambda assumes a third to touch the table. No hop can reach past the next one.
 
 ## The five tools
 
-Declared inline in `infrastructure/agentcore.tf`, so the contract the model
-sees has no second source of truth.
+Declared in `infrastructure/tools.json`. Terraform expands that file into the
+gateway target with `dynamic` blocks, the local runner feeds it to the model as
+a Converse `toolConfig`, and a test asserts it against the handlers — one
+source of truth, read three ways.
 
 | Tool | Parameters | Purpose |
 |---|---|---|
@@ -160,7 +162,9 @@ infrastructure/       Terraform, flat root — one file per concern
   dynamodb.tf         the items table
   lambda.tf           packaging, function, log group
   iam.tf              Lambda, gateway and harness roles
-  agentcore.tf        gateway, target with the five tools, harness
+  agentcore.tf        gateway, target, harness
+  tools.json          the five tool schemas — read by Terraform, tests, scripts
+  agent_instruction.md  system prompt, same
   outputs.tf
 
 src/todo_agent/       Lambda source — this directory is the deployment package
@@ -170,7 +174,10 @@ src/todo_agent/       Lambda source — this directory is the deployment package
   models.py           TodoItem, TodoStatus, ToolInvocation
   errors.py           domain errors surfaced to the model
 
-scripts/chat.py       interactive InvokeHarness client that prints the tool trace
+scripts/
+  chat.py             interactive InvokeHarness client against the deployed stack
+  local_invoke.py     the same Lambda, driven offline through a fake gateway event
+  local_agent.py      the agent loop locally: real model, mocked everything else
 tests/                unit tests on mocks, integration tests on moto
 ```
 
@@ -190,6 +197,33 @@ terraform validate        # no credentials needed; plan and apply need them
 terraform apply
 eval "$(terraform output -raw chat_command)"
 ```
+
+### Verifying without deploying
+
+Most of the stack can be exercised before anything exists in AWS.
+
+```bash
+PYTHONPATH=src python scripts/local_invoke.py
+```
+
+Offline, no credentials: builds the event and `client_context` the gateway
+would send, runs both the happy path and the rejection cases through the real
+`lambda_handler`, and stores the results in moto. Covers the invocation
+contract, dispatch, validation and persistence — everything below the model.
+
+```bash
+AWS_PROFILE=... PYTHONPATH=src python scripts/local_agent.py
+```
+
+Replaces the harness with a Converse tool-use loop reading the same
+`tools.json` and `agent_instruction.md` that Terraform publishes, executing
+tools locally against moto. This is what proves the model resolves *"delete buy
+a milk"* into `search_items` then `delete_item`. It calls the model for real —
+a few cents a conversation — but deploys nothing. Only Bedrock is allowed
+through moto's URL passthrough; every other AWS call stays mocked.
+
+It is not AgentCore: iteration limits, memory and the gateway's MCP layer exist
+only once the stack is applied.
 
 Nova enables itself on first invocation. Switching to a gated model family
 means submitting its use-case form first — check with

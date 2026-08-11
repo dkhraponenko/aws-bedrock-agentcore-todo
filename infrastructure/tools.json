@@ -1,0 +1,86 @@
+[
+  {
+    "name": "add_item",
+    "description": "Add a new task to the user's todo list.",
+    "properties": [
+      {
+        "name": "text",
+        "type": "string",
+        "description": "What the task is, in the user's own words. For example: buy a milk.",
+        "required": true
+      },
+      {
+        "name": "priority",
+        "type": "integer",
+        "description": "Priority from 1 (highest) to 5 (lowest). Defaults to 3 when the user does not say.",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "list_items",
+    "description": "Return every task on the user's list, oldest first. Use this when the user asks to see the whole list.",
+    "properties": [
+      {
+        "name": "status",
+        "type": "string",
+        "description": "Optional filter, either PENDING or DONE. Omit to return tasks in any state.",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "search_items",
+    "description": "Find tasks whose text matches a query, case-insensitively. Returns the item_id of each match. Call this before update_item or delete_item whenever the user identifies a task by its wording instead of an id.",
+    "properties": [
+      {
+        "name": "query",
+        "type": "string",
+        "description": "Words to look for in the task text, for example: milk.",
+        "required": true
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "description": "Optional filter, either PENDING or DONE.",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "update_item",
+    "description": "Change the text and/or the status of one existing task. Requires an item_id obtained from search_items or list_items. At least one of text or status must be supplied.",
+    "properties": [
+      {
+        "name": "item_id",
+        "type": "string",
+        "description": "Id of the task to update, as returned by search_items or list_items.",
+        "required": true
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "New task text. Omit to leave the wording unchanged.",
+        "required": false
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "description": "New status, either PENDING or DONE. Omit to leave the status unchanged.",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "delete_item",
+    "description": "Permanently remove one task. Requires an item_id obtained from search_items or list_items.",
+    "properties": [
+      {
+        "name": "item_id",
+        "type": "string",
+        "description": "Id of the task to delete, as returned by search_items or list_items.",
+        "required": true
+      }
+    ]
+  }
+]

@@ -102,6 +102,10 @@ def search_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]
 
 def update_item(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
     """Update the text and/or status of one item by id."""
+    # Required parameters first: a missing item_id should say so, rather than
+    # the emptier "nothing to update" below.
+    item_id = _require_str(invocation, "item_id")
+
     text = _optional_str(invocation, "text")
     status = _optional_status(invocation)
     if text is None and status is None:
@@ -110,7 +114,7 @@ def update_item(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
 
     item = store.update(
         user_id=invocation.user_id,
-        item_id=_require_str(invocation, "item_id"),
+        item_id=item_id,
         text=text,
         status=status,
     )
