@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from itertools import islice
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 TABLE_NAME = os.environ.get("TODO_TABLE_NAME", "")
 _CONDITION_FAILED = "ConditionalCheckFailedException"
+
+# Text matching happens here, not in DynamoDB, so a query matching nothing would
+# otherwise read the whole partition. Stopping early is reported, not hidden.
+SEARCH_SCAN_LIMIT = 500
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -52,6 +57,18 @@ class DynamoDBClient(Protocol):
     def update_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
 
     def delete_item(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """What a bounded search found, and whether it looked at the whole list.
+
+    `exhaustive` is false when the search stopped early, so the caller can say
+    "there may be more".
+    """
+
+    items: list[TodoItem]
+    exhaustive: bool
 
 
 class TodoStore:
@@ -105,16 +122,34 @@ class TodoStore:
         items = self._query(user_id, status)
         return list(items if limit is None else islice(items, limit))
 
-    def search(self, user_id: str, query: str, status: TodoStatus | None = None) -> list[TodoItem]:
+    def search(
+        self,
+        user_id: str,
+        query: str,
+        status: TodoStatus | None = None,
+        limit: int | None = None,
+    ) -> SearchResult:
         """Return items whose text contains `query`, case-insensitively.
 
         Status is pushed down as a FilterExpression; the text match stays here
-        because DynamoDB's `contains()` is case-sensitive and "milk" should
-        find "Buy Milk". Safe to do in-process: the Query is already scoped to
-        one partition.
+        because DynamoDB's `contains()` is case-sensitive and "milk" should find
+        "Buy Milk". That is what makes the read unbounded unless capped, so it
+        stops at `limit` matches or `SEARCH_SCAN_LIMIT` items examined, and says
+        which. A search never crosses a partition.
         """
         needle = query.casefold()
-        return [item for item in self._query(user_id, status) if needle in item.text.casefold()]
+        matches: list[TodoItem] = []
+        scanned = 0
+
+        for item in islice(self._query(user_id, status), SEARCH_SCAN_LIMIT):
+            scanned += 1
+            if needle not in item.text.casefold():
+                continue
+            matches.append(item)
+            if limit is not None and len(matches) >= limit:
+                return SearchResult(items=matches, exhaustive=False)
+
+        return SearchResult(items=matches, exhaustive=scanned < SEARCH_SCAN_LIMIT)
 
     def get(self, user_id: str, item_id: str) -> TodoItem:
         """Return a single item, or raise `ItemNotFoundError`."""

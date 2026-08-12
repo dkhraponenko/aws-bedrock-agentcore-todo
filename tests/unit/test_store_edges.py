@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
+from todo_agent import store as store_module
 from todo_agent.store import DynamoDBClient, TodoStore
 
 
@@ -54,6 +55,51 @@ def test_list_all_stops_once_the_limit_is_reached() -> None:
 
     assert [item.text for item in items] == ["first"]
     assert client.query.call_count == 1, "the second page must never be fetched"
+
+
+def test_search_reading_the_whole_list_reports_it_as_exhaustive() -> None:
+    client = MagicMock(spec=DynamoDBClient)
+    client.query.side_effect = [
+        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
+        {"Items": [attribute_map("b", "second")]},
+    ]
+    store = TodoStore(table_name="t", dynamodb_client=client)
+
+    result = store.search(USER, "second")
+
+    assert [item.text for item in result.items] == ["second"]
+    assert result.exhaustive is True
+
+
+def test_search_stops_scanning_at_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A query that matches nothing must not read an unbounded partition."""
+    client = MagicMock(spec=DynamoDBClient)
+    client.query.side_effect = [
+        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
+        {"Items": [attribute_map("b", "second")]},
+    ]
+    monkeypatch.setattr(store_module, "SEARCH_SCAN_LIMIT", 1)
+    store = TodoStore(table_name="t", dynamodb_client=client)
+
+    result = store.search(USER, "second")
+
+    assert result.items == []
+    assert result.exhaustive is False, "a capped scan has not seen the whole list"
+    assert client.query.call_count == 1, "the second page must never be fetched"
+
+
+def test_search_stops_once_enough_matches_are_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock(spec=DynamoDBClient)
+    client.query.side_effect = [
+        {"Items": [attribute_map("a", "milk"), attribute_map("b", "more milk")]},
+    ]
+    monkeypatch.setattr(store_module, "SEARCH_SCAN_LIMIT", 100)
+    store = TodoStore(table_name="t", dynamodb_client=client)
+
+    result = store.search(USER, "milk", limit=1)
+
+    assert [item.text for item in result.items] == ["milk"]
+    assert result.exhaustive is False
 
 
 @pytest.mark.parametrize(

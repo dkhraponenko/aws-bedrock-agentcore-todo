@@ -9,9 +9,10 @@ import pytest
 
 from tests.conftest import create_invocation
 from todo_agent.errors import ItemNotFoundError
+from todo_agent.lambda_handler import lambda_handler
 from todo_agent.models import DEFAULT_PRIORITY, USER_ID_KEY, TodoItem, TodoStatus
-from todo_agent.service import LIST_RESULT_LIMIT, TOOL_NAMES, TodoService
-from todo_agent.store import TodoStore
+from todo_agent.service import LIST_RESULT_LIMIT, SEARCH_RESULT_LIMIT, TOOL_NAMES, TodoService
+from todo_agent.store import SearchResult, TodoStore
 
 
 if TYPE_CHECKING:
@@ -93,21 +94,36 @@ class TestSearchAndList:
     def test_search_items_returns_ids_the_model_can_act_on(
         self, service: type[TodoService], mock_store: MagicMock
     ) -> None:
-        mock_store.search.return_value = [make_item(item_id="id-1")]
+        mock_store.search.return_value = SearchResult(items=[make_item(item_id="id-1")], exhaustive=True)
 
         result = service.process(*create_invocation("search_items", {"query": "milk"}))
 
-        mock_store.search.assert_called_once_with(user_id="demo-user", query="milk", status=None)
+        mock_store.search.assert_called_once_with(
+            user_id="demo-user", query="milk", status=None, limit=SEARCH_RESULT_LIMIT + 1
+        )
         assert result["count"] == 1
+        assert result["truncated"] is False
         assert result["items"][0]["item_id"] == "id-1"
 
     def test_search_items_truncates_long_result_sets(self, service: type[TodoService], mock_store: MagicMock) -> None:
-        mock_store.search.return_value = [make_item(item_id=f"id-{i}") for i in range(40)]
+        matches = [make_item(item_id=f"id-{i}") for i in range(SEARCH_RESULT_LIMIT + 1)]
+        mock_store.search.return_value = SearchResult(items=matches, exhaustive=False)
 
         result = service.process(*create_invocation("search_items", {"query": "a"}))
 
         assert result["truncated"] is True
-        assert result["count"] == len(result["items"]) < 40
+        assert result["count"] == len(result["items"]) == SEARCH_RESULT_LIMIT
+
+    def test_search_items_reports_a_capped_scan_as_truncated(
+        self, service: type[TodoService], mock_store: MagicMock
+    ) -> None:
+        """Few matches from a scan that stopped early is not a complete answer."""
+        mock_store.search.return_value = SearchResult(items=[make_item(item_id="id-1")], exhaustive=False)
+
+        result = service.process(*create_invocation("search_items", {"query": "milk"}))
+
+        assert result["count"] == 1
+        assert result["truncated"] is True
 
     def test_list_items_passes_status_filter_through(self, service: type[TodoService], mock_store: MagicMock) -> None:
         mock_store.list_all.return_value = []
@@ -175,6 +191,17 @@ class TestUpdateAndDelete:
         result = service.process(*create_invocation("delete_item", {"item_id": "gone"}))
 
         assert "gone" in result["error"]
+
+
+def test_search_items_runs_end_to_end_against_a_real_store(wired_store: None) -> None:
+    """A mocked store cannot catch the handler mis-reading what the real one returns."""
+    lambda_handler(*create_invocation("add_item", {"text": "buy a milk"}))
+
+    result = lambda_handler(*create_invocation("search_items", {"query": "MILK"}))
+
+    assert result["count"] == 1
+    assert result["truncated"] is False
+    assert result["items"][0]["text"] == "buy a milk"
 
 
 class TestInvocationParsing:

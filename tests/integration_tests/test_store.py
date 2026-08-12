@@ -89,19 +89,22 @@ def test_list_filters_by_status_server_side(store: TodoStore) -> None:
 def test_search_matches_case_insensitively(store: TodoStore, query: str) -> None:
     created = store.add(USER, "Buy a Milk", priority=3)
 
-    assert [item.item_id for item in store.search(USER, query)] == [created.item_id]
+    assert [item.item_id for item in store.search(USER, query).items] == [created.item_id]
 
 
 def test_search_returns_nothing_when_no_text_matches(store: TodoStore) -> None:
     store.add(USER, "buy a milk", priority=3)
 
-    assert store.search(USER, "mortgage") == []
+    result = store.search(USER, "mortgage")
+
+    assert result.items == []
+    assert result.exhaustive is True, "a short list is read to the end"
 
 
 def test_search_never_crosses_users(store: TodoStore) -> None:
     store.add(OTHER_USER, "buy a milk", priority=3)
 
-    assert store.search(USER, "milk") == []
+    assert store.search(USER, "milk").items == []
 
 
 def test_update_changes_only_the_supplied_fields(store: TodoStore) -> None:

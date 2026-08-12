@@ -101,16 +101,20 @@ def list_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
 
 def search_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
     """Return items whose text matches the query — the model's only source of `item_id`."""
-    matches = store.search(
+    # One past the cap, so "there are more" needs no second read.
+    result = store.search(
         user_id=invocation.user_id,
         query=_require_str(invocation, "query"),
         status=_optional_status(invocation),
+        limit=SEARCH_RESULT_LIMIT + 1,
     )
-    truncated = matches[:SEARCH_RESULT_LIMIT]
+    matches = result.items[:SEARCH_RESULT_LIMIT]
     return {
-        "count": len(truncated),
-        "truncated": len(matches) > len(truncated),
-        "items": [item.to_agent() for item in truncated],
+        "count": len(matches),
+        # A scan that stopped at its cap reports truncation too, so a partial
+        # answer is never presented as the complete one.
+        "truncated": not result.exhaustive,
+        "items": [item.to_agent() for item in matches],
     }
 
 
