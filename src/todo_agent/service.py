@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 SEARCH_RESULT_LIMIT = 25
 
+# Capped far higher than a search, but still capped: an uncapped partition is
+# read into the Lambda and resent to the model every turn.
+LIST_RESULT_LIMIT = 100
+
 
 def _require_str(invocation: ToolInvocation, name: str) -> str:
     """Return a required string argument, or raise `ValidationError`."""
@@ -80,9 +84,19 @@ def add_item(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
 
 
 def list_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
-    """Return the current user's entire list."""
-    items = store.list_all(invocation.user_id, status=_optional_status(invocation))
-    return {"count": len(items), "items": [item.to_agent() for item in items]}
+    """Return the current user's list, oldest first, up to `LIST_RESULT_LIMIT`."""
+    # One past the cap, so "there are more" needs no second query.
+    items = store.list_all(
+        invocation.user_id,
+        status=_optional_status(invocation),
+        limit=LIST_RESULT_LIMIT + 1,
+    )
+    truncated = items[:LIST_RESULT_LIMIT]
+    return {
+        "count": len(truncated),
+        "truncated": len(items) > len(truncated),
+        "items": [item.to_agent() for item in truncated],
+    }
 
 
 def search_items(store: TodoStore, invocation: ToolInvocation) -> dict[str, Any]:
@@ -157,7 +171,14 @@ class TodoService:
 
     @classmethod
     def process(cls, event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Handle one gateway tool invocation."""
+        """Handle one gateway tool invocation.
+
+        Raises:
+            RuntimeError: `setup()` was never called.
+            MissingIdentityError: The invocation carried no caller identity.
+                Not caught: an error result would report a plumbing failure as
+                an ordinary tool outcome instead of raising the error metric.
+        """
         if cls._store is None:
             msg = "TodoService not initialized. Call setup() first."
             raise RuntimeError(msg)

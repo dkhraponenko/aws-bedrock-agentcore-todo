@@ -9,8 +9,8 @@ import pytest
 
 from tests.conftest import create_invocation
 from todo_agent.errors import ItemNotFoundError
-from todo_agent.models import DEFAULT_PRIORITY, TodoItem, TodoStatus
-from todo_agent.service import TOOL_NAMES, TodoService
+from todo_agent.models import DEFAULT_PRIORITY, USER_ID_KEY, TodoItem, TodoStatus
+from todo_agent.service import LIST_RESULT_LIMIT, TOOL_NAMES, TodoService
 from todo_agent.store import TodoStore
 
 
@@ -114,7 +114,24 @@ class TestSearchAndList:
 
         service.process(*create_invocation("list_items", {"status": "done"}))
 
-        mock_store.list_all.assert_called_once_with("demo-user", status=TodoStatus.DONE)
+        mock_store.list_all.assert_called_once_with("demo-user", status=TodoStatus.DONE, limit=LIST_RESULT_LIMIT + 1)
+
+    def test_list_items_truncates_a_long_list(self, service: type[TodoService], mock_store: MagicMock) -> None:
+        """An unbounded list would be read into the Lambda and resent to the model whole."""
+        mock_store.list_all.return_value = [make_item(item_id=f"id-{i}") for i in range(LIST_RESULT_LIMIT + 1)]
+
+        result = service.process(*create_invocation("list_items"))
+
+        assert result["truncated"] is True
+        assert result["count"] == len(result["items"]) == LIST_RESULT_LIMIT
+
+    def test_a_list_within_the_limit_is_not_flagged(self, service: type[TodoService], mock_store: MagicMock) -> None:
+        mock_store.list_all.return_value = [make_item(item_id="id-1")]
+
+        result = service.process(*create_invocation("list_items"))
+
+        assert result["truncated"] is False
+        assert result["count"] == 1
 
     def test_list_items_rejects_unknown_status(self, service: type[TodoService], mock_store: MagicMock) -> None:
         result = service.process(*create_invocation("list_items", {"status": "later"}))
@@ -169,17 +186,18 @@ class TestInvocationParsing:
 
         result = service.process(*create_invocation("list_items", target="some-other-target"))
 
-        assert result == {"count": 0, "items": []}
+        assert result == {"count": 0, "truncated": False, "items": []}
 
     def test_unprefixed_tool_name_still_dispatches(self, service: type[TodoService], mock_store: MagicMock) -> None:
         mock_store.list_all.return_value = []
 
         result = service.process(*create_invocation("list_items", target=""))
 
-        assert result == {"count": 0, "items": []}
+        assert result == {"count": 0, "truncated": False, "items": []}
 
     def test_missing_client_context_is_reported_not_raised(self, service: type[TodoService]) -> None:
-        result = service.process({}, object())
+        """A context without a tool name names no tool — which is an error result, not a crash."""
+        result = service.process({USER_ID_KEY: "demo-user"}, object())
 
         assert "error" in result
 

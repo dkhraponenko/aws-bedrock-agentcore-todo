@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from itertools import islice
 from typing import TYPE_CHECKING, Any, Protocol
 
 import boto3
@@ -90,9 +91,19 @@ class TodoStore:
         logger.info("Created item", extra={"item_id": item.item_id, "user_id": user_id})
         return item
 
-    def list_all(self, user_id: str, status: TodoStatus | None = None) -> list[TodoItem]:
-        """Return every item for a user, oldest first, optionally by status."""
-        return list(self._query(user_id, status))
+    def list_all(
+        self,
+        user_id: str,
+        status: TodoStatus | None = None,
+        limit: int | None = None,
+    ) -> list[TodoItem]:
+        """Return a user's items, oldest first, optionally by status.
+
+        `limit` bounds the read, not just the slice returned: `_query` is a
+        generator, so paging stops as soon as enough items have been seen.
+        """
+        items = self._query(user_id, status)
+        return list(items if limit is None else islice(items, limit))
 
     def search(self, user_id: str, query: str, status: TodoStatus | None = None) -> list[TodoItem]:
         """Return items whose text contains `query`, case-insensitively.

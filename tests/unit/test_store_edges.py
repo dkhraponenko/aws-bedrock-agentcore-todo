@@ -41,6 +41,21 @@ def test_query_follows_the_pagination_cursor() -> None:
     assert client.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"item_id": {"S": "a"}}
 
 
+def test_list_all_stops_once_the_limit_is_reached() -> None:
+    """The cap has to bound the read, not just the returned slice."""
+    client = MagicMock(spec=DynamoDBClient)
+    client.query.side_effect = [
+        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
+        {"Items": [attribute_map("b", "second")]},
+    ]
+    store = TodoStore(table_name="t", dynamodb_client=client)
+
+    items = store.list_all(USER, limit=1)
+
+    assert [item.text for item in items] == ["first"]
+    assert client.query.call_count == 1, "the second page must never be fetched"
+
+
 @pytest.mark.parametrize(
     ("method", "call"),
     [

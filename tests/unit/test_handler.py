@@ -18,7 +18,7 @@ def test_lambda_handler_delegates_to_the_service() -> None:
 
     event, context = create_invocation("list_items")
 
-    assert handler_module.lambda_handler(event, context) == {"count": 0, "items": []}
+    assert handler_module.lambda_handler(event, context) == {"count": 0, "truncated": False, "items": []}
 
 
 def test_lambda_handler_passes_the_context_through() -> None:

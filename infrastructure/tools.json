@@ -19,7 +19,7 @@
   },
   {
     "name": "list_items",
-    "description": "Return every task on the user's list, oldest first. Use this when the user asks to see the whole list.",
+    "description": "Return every task on the user's list, oldest first, up to 100 tasks. Use this when the user asks to see the whole list. When the result sets truncated to true, more tasks exist than were returned: say so, and offer search_items to narrow them down.",
     "properties": [
       {
         "name": "status",
