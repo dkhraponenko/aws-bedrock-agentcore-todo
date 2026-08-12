@@ -1,10 +1,12 @@
 """AgentCore Runtime entry point: build the agent once, stream one turn per call.
 
-Identity arrives in the payload rather than being derived here. That is safe
-because of who can reach this code: the runtime is invoked by exactly one IAM
-principal, the chat proxy, which reads the caller from the Function URL's IAM
-authorizer — a value AWS validated before the proxy ran. The trust boundary is
-therefore the proxy's role, not anything this module can re-check.
+Identity arrives in the payload rather than being derived here, and this module
+cannot re-check it: the runtime sees an IAM principal, not an end user. The
+trust boundary is therefore whoever holds `InvokeAgentRuntime` on this runtime
+— today only the operator running `scripts/chat.py`, which sends whatever
+`USER_ID` says. Everything downstream partitions by that value, so the
+isolation is real end to end; what is missing is a client that *establishes*
+who the user is and puts a verified subject in the payload.
 """
 
 from __future__ import annotations
