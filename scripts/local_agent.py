@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""Run the agent loop locally: real model, real tool schemas, nothing deployed.
+"""Run the deployed agent loop locally: real model, nothing deployed.
 
-Stands in for the AgentCore harness with a Bedrock Converse tool-use loop. The
-tool contract comes from infrastructure/tools.json and the system prompt from
-infrastructure/agent_instruction.md — the same bytes Terraform publishes — so
-this exercises what unit tests cannot: whether the model picks the right tool
-and resolves wording to an item_id before deleting.
+Drives the same `TodoAgent` AgentCore Runtime executes, through the seams it
+already has: the gateway becomes a local dispatcher into the tool Lambda, and
+memory a dictionary. The loop itself is not reimplemented.
 
     AWS_PROFILE=personal python scripts/local_agent.py
 
-Needs credentials and costs a few cents per conversation; it deploys nothing.
-DynamoDB is moto in-process, with Bedrock allowed through by URL, because moto
-otherwise intercepts every AWS call — including the one to the model.
-
-What it does not cover: AgentCore's own orchestration — iteration limits,
-memory, the gateway's MCP layer. Those exist only once the stack is applied.
-The default model id is duplicated from infrastructure/variables.tf; one
-environment variable is not worth a shared file.
+Costs a few cents per conversation. DynamoDB is moto in-process, with Bedrock
+allowed through by URL, since moto otherwise intercepts the model call too.
+It does not cover the MCP transport or AgentCore's session lifecycle.
 """
 
 from __future__ import annotations
@@ -27,11 +20,11 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 
-# src/ is a source root, not an installed package: the deployment artifact is
-# the source tree itself, so there is no editable install to lean on.
+# src/ is a source root, not an installed package: the artifact is the source
+# tree itself, so there is no editable install to lean on.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # Set before todo_agent is imported: the handler builds its store at import
@@ -46,6 +39,8 @@ from moto import mock_aws
 from todo_agent.lambda_handler import lambda_handler
 from todo_agent.service import TodoService
 from todo_agent.store import TodoStore
+from todo_runtime.agent import AgentConfig, TodoAgent
+from todo_runtime.memory import ConversationMemory
 
 
 if TYPE_CHECKING:
@@ -61,61 +56,84 @@ TOOLS_FILE = INFRASTRUCTURE / "tools.json"
 INSTRUCTION_FILE = INFRASTRUCTURE / "agent_instruction.md"
 
 TABLE_NAME = "todo-agent-items-local"
+TARGET_NAME = "todo"
+TOOL_SEPARATOR = "___"
 DEFAULT_MODEL = "us.amazon.nova-pro-v1:0"
-MAX_ITERATIONS = 10
 RESULT_PREVIEW_CHARS = 200
 
 # Everything else is mocked; only the model call leaves this machine.
 MOTO_CONFIG: DefaultConfig = {"core": {"passthrough": {"urls": [r"https://bedrock-runtime\..*"]}}}
 
 
-class BedrockRuntime(Protocol):
-    """The single Bedrock call this script makes."""
+class LocalGateway:
+    """Stands in for the MCP gateway by calling the tool Lambda in-process.
 
-    def converse(self, **kwargs: Any) -> dict[str, Any]: ...  # noqa: ANN401
+    Tool names carry the same `<target>___<tool>` prefix the real gateway
+    publishes, so the handler's parsing is exercised rather than bypassed.
+    """
 
+    def __init__(self, target: str = TARGET_NAME) -> None:
+        self._target = target
+        self._tools = json.loads(TOOLS_FILE.read_text())
 
-class FakeClientContext:
-    """Stands in for the Lambda client context AgentCore populates."""
-
-    def __init__(self, tool: str) -> None:
-        self.custom = {"bedrockAgentCoreToolName": f"todo___{tool}"}
-
-
-class FakeLambdaContext:
-    """The only attribute the handler reads off the AWS-supplied context."""
-
-    def __init__(self, tool: str) -> None:
-        self.client_context = FakeClientContext(tool)
-
-
-def load_tool_config() -> dict[str, Any]:
-    """Translate tools.json into the toolConfig shape Converse expects."""
-    tools = json.loads(TOOLS_FILE.read_text())
-    return {
-        "tools": [
+    def list_tools(self) -> list[dict[str, Any]]:
+        """Publish tools.json in the shape the gateway would return them."""
+        return [
             {
-                "toolSpec": {
-                    "name": tool["name"],
-                    "description": tool["description"],
-                    "inputSchema": {
-                        "json": {
-                            "type": "object",
-                            "properties": {
-                                prop["name"]: {"type": prop["type"], "description": prop["description"]}
-                                for prop in tool["properties"]
-                            },
-                            "required": [prop["name"] for prop in tool["properties"] if prop["required"]],
-                        },
+                "name": f"{self._target}___{tool['name']}",
+                "description": tool["description"],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        prop["name"]: {"type": prop["type"], "description": prop["description"]}
+                        for prop in tool["properties"]
                     },
+                    "required": [prop["name"] for prop in tool["properties"] if prop["required"]],
                 },
             }
-            for tool in tools
-        ],
-    }
+            for tool in self._tools
+        ]
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Invoke the handler exactly as the gateway would."""
+        # The real gateway refuses a tool it does not publish, and a local run
+        # must not be more forgiving than production.
+        if not name.startswith(f"{self._target}{TOOL_SEPARATOR}"):
+            msg = f"Tool {name!r} is not published by target {self._target!r}."
+            raise ValueError(msg)
+        return lambda_handler(arguments, _FakeLambdaContext(name))
 
 
-def bedrock_client() -> BedrockRuntime:
+class _FakeClientContext:
+    def __init__(self, tool: str) -> None:
+        self.custom = {"bedrockAgentCoreToolName": tool}
+
+
+class _FakeLambdaContext:
+    def __init__(self, tool: str) -> None:
+        self.client_context = _FakeClientContext(tool)
+
+
+class DictMemoryClient:
+    """AgentCore Memory's two calls, backed by a list that dies with the process."""
+
+    def __init__(self) -> None:
+        self._events: list[dict[str, Any]] = []
+
+    def create_event(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        self._events.append(dict(kwargs))
+        return {"event": kwargs}
+
+    def list_events(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
+        matching = [
+            event
+            for event in self._events
+            if event["actorId"] == kwargs["actorId"] and event["sessionId"] == kwargs["sessionId"]
+        ]
+        return {"events": matching[-kwargs.get("maxResults", len(matching)) :]}
+
+
+def bedrock_client() -> Any:  # noqa: ANN401
     """Build a Bedrock client that survives moto's fake credentials.
 
     `mock_aws` overwrites the credential environment variables, so the real
@@ -149,68 +167,22 @@ def wire_store() -> None:
     TodoService.setup(TodoStore(table_name=TABLE_NAME, dynamodb_client=client))
 
 
-def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Execute one tool call through the real Lambda entry point."""
-    print(f"\n{DIM}  -> {name} {json.dumps(arguments, ensure_ascii=False)}{RESET}")
-    result = lambda_handler(arguments, FakeLambdaContext(name))
-
-    rendered = json.dumps(result, ensure_ascii=False)
-    if len(rendered) > RESULT_PREVIEW_CHARS:
-        rendered = rendered[:RESULT_PREVIEW_CHARS] + "…"
-    print(f"{DIM}     {rendered}{RESET}")
-    return result
-
-
-def turn(
-    client: BedrockRuntime,
-    model_id: str,
-    system: list[dict[str, str]],
-    tool_config: dict[str, Any],
-    messages: list[dict[str, Any]],
-) -> None:
-    """Run one user turn to completion, executing tools until the model stops."""
-    for _ in range(MAX_ITERATIONS):
-        response = client.converse(
-            modelId=model_id,
-            system=system,
-            messages=messages,
-            toolConfig=tool_config,
-        )
-        message = response["output"]["message"]
-        messages.append(message)
-
-        for block in message["content"]:
-            if text := block.get("text"):
-                print(text.strip())
-
-        if response["stopReason"] != "tool_use":
-            return
-
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": block["toolUse"]["toolUseId"],
-                            "content": [{"json": run_tool(block["toolUse"]["name"], block["toolUse"]["input"])}],
-                        },
-                    }
-                    for block in message["content"]
-                    if "toolUse" in block
-                ],
-            }
-        )
-
-    print(f"{DIM}[stopped: reached {MAX_ITERATIONS} iterations]{RESET}")
+def render(event: dict[str, Any]) -> None:
+    """Print one event from the agent's stream."""
+    kind = event.get("type")
+    if kind == "text":
+        sys.stdout.write(event["text"])
+        sys.stdout.flush()
+    elif kind == "tool_use":
+        print(f"\n{DIM}  -> {event['name']}{RESET}")
+    elif kind == "tool_result":
+        print(f"{DIM}     {json.dumps(event['result'], ensure_ascii=False)[:RESULT_PREVIEW_CHARS]}{RESET}")
+    elif kind == "error":
+        print(f"\n[error] {event.get('message', '')}")
 
 
-def converse_until_eof(client: BedrockRuntime, model_id: str) -> None:
-    """Read prompts until EOF, keeping one message history for the session."""
-    system = [{"text": INSTRUCTION_FILE.read_text()}]
-    tool_config = load_tool_config()
-    messages: list[dict[str, Any]] = []
-
+def converse_until_eof(agent: TodoAgent, user_id: str, session_id: str) -> None:
+    """Read prompts until EOF, keeping one session so memory accumulates."""
     while True:
         try:
             prompt = input(f"\n{BOLD}you >{RESET} ").strip()
@@ -220,26 +192,39 @@ def converse_until_eof(client: BedrockRuntime, model_id: str) -> None:
         if not prompt:
             continue
 
-        messages.append({"role": "user", "content": [{"text": prompt}]})
         print(f"{BOLD}agent >{RESET} ", end="")
         try:
-            turn(client, model_id, system, tool_config, messages)
+            for event in agent.run(user_id, session_id, prompt):
+                render(event)
         except ClientError as e:
             print(f"\n{e.response.get('Error', {}).get('Code', 'Unknown')}: {e}")
+        print()
 
 
 def main() -> int:
-    """Wire the mocked table and talk to the real model until EOF."""
+    """Wire the stand-ins and talk to the real model until EOF."""
     logging.getLogger("todo_agent").setLevel(logging.CRITICAL)
+    logging.getLogger("todo_runtime").setLevel(logging.CRITICAL)
 
     model_id = os.environ.get("AGENT_MODEL", DEFAULT_MODEL)
+    user_id = os.environ.get("USER_ID", "local-operator")
     client = bedrock_client()
 
     with mock_aws(config=MOTO_CONFIG):
         wire_store()
-        print(f"{BOLD}{model_id}{RESET}  session {uuid.uuid4()}  (Ctrl-D to exit)")
+        agent = TodoAgent(
+            bedrock=client,
+            gateway=LocalGateway(),
+            memory=ConversationMemory(DictMemoryClient(), memory_id="local"),
+            config=AgentConfig(
+                model_id=model_id,
+                system_prompt=INSTRUCTION_FILE.read_text(),
+            ),
+        )
+        session_id = str(uuid.uuid4())
+        print(f"{BOLD}{model_id}{RESET}  user {user_id}  session {session_id}  (Ctrl-D to exit)")
         print(f"{DIM}DynamoDB is moto in-process; nothing is deployed{RESET}")
-        converse_until_eof(client, model_id)
+        converse_until_eof(agent, user_id, session_id)
 
     return 0
 
