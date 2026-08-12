@@ -126,11 +126,18 @@ its answer are written back to back and can share a timestamp, and sorting would
 be free to swap them — and the window keeps the newest events, so it can begin
 mid-turn and any leading assistant message is dropped.
 
-**Every read is bounded.** `search_items` returns at most 25 matches and
-`list_items` at most 100 items, each flagging `truncated` so the model can say
-so rather than presenting a partial list as complete. The cap reaches the store,
-not just the response: `list_all` takes a `limit` and stops paging, so a long
-partition is never pulled into the Lambda whole.
+**Every read is bounded, in the store and not just in the response.**
+`list_items` returns at most 100 items and `search_items` at most 25 matches,
+and both caps reach `TodoStore`: `list_all` takes a `limit` and stops paging
+once it is met, so a long partition is never pulled into the Lambda whole.
+Search needs a second bound, because the text match runs in this process —
+DynamoDB's `contains()` is case-sensitive, so "milk" would not find "Buy Milk"
+— which means a query matching nothing would otherwise read the partition
+end to end. It stops at whichever comes first: enough matches, or
+`SEARCH_SCAN_LIMIT` items examined. Stopping early is never hidden: the store
+returns `exhaustive`, and `truncated` in the tool result is false only when the
+whole list was read and everything found fits, so the model can say there may
+be more instead of presenting a partial answer as the complete one.
 
 **The model is reached through an inference profile**, so IAM grants the
 profile ARN *and* the underlying `foundation-model/*` ARN in every region the
