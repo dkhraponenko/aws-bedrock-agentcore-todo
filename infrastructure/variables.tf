@@ -31,6 +31,45 @@ variable "agent_base_model" {
   default     = "amazon.nova-pro-v1:0"
 }
 
+variable "runtime_python_version" {
+  description = "Python version AgentCore Runtime executes the agent loop with."
+  type        = string
+  default     = "PYTHON_3_13"
+}
+
+variable "runtime_entry_point" {
+  description = <<-EOT
+    What AgentCore Runtime calls to start a turn. The API documents this only as
+    "the function or method that should be invoked", so the exact binding is
+    confirmed on the first apply; it is a variable rather than a literal so
+    correcting it does not need a code change.
+  EOT
+  type        = list(string)
+  default     = ["todo_runtime.entrypoint.invoke"]
+}
+
+variable "runtime_idle_timeout_seconds" {
+  description = <<-EOT
+    How long an idle conversation keeps its runtime session. Sessions bill for
+    their lifetime, not for time spent working, so this bounds what an abandoned
+    browser tab costs. The service default is 900.
+  EOT
+  type        = number
+  default     = 300
+}
+
+variable "runtime_max_lifetime_seconds" {
+  description = "Hard ceiling on one runtime session, after which it is replaced."
+  type        = number
+  default     = 3600
+}
+
+variable "memory_expiry_days" {
+  description = "How long conversation events are kept. Chat history for a todo list, not a record."
+  type        = number
+  default     = 7
+}
+
 variable "lambda_runtime" {
   description = "Python runtime for the tool Lambda."
   type        = string

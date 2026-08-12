@@ -104,15 +104,15 @@ resource "aws_iam_role_policy" "gateway" {
 }
 
 ##############################################################################
-# Harness role — what the agent loop itself may do
+# Runtime role — what the agent loop itself may do
 ##############################################################################
 
-resource "aws_iam_role" "harness" {
-  name               = "${var.project_name}-harness-role"
+resource "aws_iam_role" "runtime" {
+  name               = "${var.project_name}-runtime-role"
   assume_role_policy = data.aws_iam_policy_document.agentcore_assume_role.json
 }
 
-data "aws_iam_policy_document" "harness" {
+data "aws_iam_policy_document" "runtime" {
   statement {
     sid    = "InvokeFoundationModel"
     effect = "Allow"
@@ -121,15 +121,16 @@ data "aws_iam_policy_document" "harness" {
       "bedrock:InvokeModelWithResponseStream",
     ]
     resources = [
-      # The inference profile the harness is configured with...
+      # The inference profile the loop is configured with...
       "arn:aws:bedrock:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.agent_model}",
       # ...and the underlying model in every region that profile may route to.
       "arn:aws:bedrock:*::foundation-model/${var.agent_base_model}",
     ]
   }
 
-  # Outbound auth is aws_iam, so the harness reaches its tools by calling the
-  # gateway as itself.
+  # The loop reaches its tools by signing MCP requests to the gateway as itself.
+  # There is no boto3 operation for this; the action authorises the raw
+  # endpoint, which src/todo_runtime/mcp.py calls directly.
   statement {
     sid       = "InvokeTodoGateway"
     effect    = "Allow"
@@ -137,31 +138,43 @@ data "aws_iam_policy_document" "harness" {
     resources = [aws_bedrockagentcore_gateway.todo.gateway_arn]
   }
 
-  # The harness keeps conversation history in a memory resource it creates for
-  # itself on first invocation, named harness_<harness_name>_<hash>. It is not
-  # a Terraform resource, so the grant is scoped by name prefix instead of ARN.
+  # Exactly the two calls src/todo_runtime/memory.py makes, on the one memory
+  # resource — the harness needed a name-prefix wildcard here because it created
+  # its own memory outside Terraform.
   statement {
-    sid    = "HarnessConversationMemory"
+    sid    = "ConversationMemory"
     effect = "Allow"
     actions = [
-      "bedrock-agentcore:GetMemory",
       "bedrock-agentcore:CreateEvent",
-      "bedrock-agentcore:GetEvent",
       "bedrock-agentcore:ListEvents",
-      "bedrock-agentcore:ListActors",
-      "bedrock-agentcore:ListSessions",
-      "bedrock-agentcore:GetMemoryRecord",
-      "bedrock-agentcore:ListMemoryRecords",
-      "bedrock-agentcore:RetrieveMemoryRecords",
+    ]
+    resources = [aws_bedrockagentcore_memory.conversations.arn]
+  }
+
+  # The service fetches the code archive as this role.
+  statement {
+    sid       = "ReadCodeArtifact"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/*"]
+  }
+
+  statement {
+    sid    = "WriteLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
     ]
     resources = [
-      "arn:aws:bedrock-agentcore:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:memory/harness_*",
+      "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/*",
     ]
   }
 }
 
-resource "aws_iam_role_policy" "harness" {
-  name   = "${var.project_name}-harness-policy"
-  role   = aws_iam_role.harness.id
-  policy = data.aws_iam_policy_document.harness.json
+resource "aws_iam_role_policy" "runtime" {
+  name   = "${var.project_name}-runtime-policy"
+  role   = aws_iam_role.runtime.id
+  policy = data.aws_iam_policy_document.runtime.json
 }

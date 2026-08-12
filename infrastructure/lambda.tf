@@ -1,23 +1,3 @@
-locals {
-  lambda_source_dir = "${path.module}/../src"
-
-  # Keep bytecode a local test run left behind out of the artifact, so the zip
-  # (and therefore source_code_hash) depends only on the source.
-  lambda_excludes = toset([
-    for file in fileset(local.lambda_source_dir, "**") :
-    file if length(regexall("(^|/)__pycache__/", file)) > 0 || endswith(file, ".pyc")
-  ])
-}
-
-# The function has no third-party dependencies, so the source tree zips
-# directly — there is no build step between `git clone` and `terraform plan`.
-data "archive_file" "lambda" {
-  type        = "zip"
-  source_dir  = local.lambda_source_dir
-  output_path = "${path.module}/build/lambda.zip"
-  excludes    = local.lambda_excludes
-}
-
 resource "aws_lambda_function" "todo" {
   function_name    = "${var.project_name}-tools"
   role             = aws_iam_role.lambda.arn

@@ -1,5 +1,7 @@
 ##############################################################################
-# Bedrock AgentCore: gateway (tools) + harness (the agent itself)
+# Bedrock AgentCore: the gateway publishing the tools
+#
+# The agent that consumes them is in runtime.tf.
 ##############################################################################
 
 # The tool contract and the system prompt live in data files rather than in
@@ -10,8 +12,9 @@ locals {
 }
 
 # The gateway is the MCP facade in front of the Lambda. AWS_IAM inbound auth
-# keeps this a pure IAM problem — CUSTOM_JWT would drag in Cognito or another
-# OIDC provider for what is a single-operator stand.
+# keeps this a pure IAM problem: the only caller is the runtime, signing as
+# itself. End-user identity travels inside the call rather than as the
+# credential, so CUSTOM_JWT here would authenticate the agent, not the person.
 resource "aws_bedrockagentcore_gateway" "todo" {
   name            = "${var.project_name}-gateway"
   role_arn        = aws_iam_role.gateway.arn
@@ -72,43 +75,4 @@ resource "aws_bedrockagentcore_gateway_target" "todo" {
       }
     }
   }
-}
-
-# The harness is the managed orchestration loop: model, instruction, tools —
-# the agent itself.
-resource "aws_bedrockagentcore_harness" "todo" {
-  # harnessName must match [a-zA-Z][a-zA-Z0-9_]{0,39} — no hyphens, unlike
-  # every other name in this stack.
-  harness_name       = "${replace(var.project_name, "-", "_")}_harness"
-  execution_role_arn = aws_iam_role.harness.arn
-  max_iterations     = 10
-
-  model {
-    bedrock_model_config {
-      model_id = var.agent_model
-    }
-  }
-
-  system_prompt {
-    text = local.agent_instruction
-  }
-
-  tool {
-    name = "todo"
-    type = "agentcore_gateway"
-
-    config {
-      agentcore_gateway {
-        gateway_arn = aws_bedrockagentcore_gateway.todo.gateway_arn
-
-        # The harness calls the gateway with its own execution role rather
-        # than an OAuth token, which is why no credential provider is needed.
-        outbound_auth {
-          aws_iam = true
-        }
-      }
-    }
-  }
-
-  depends_on = [aws_bedrockagentcore_gateway_target.todo]
 }
