@@ -28,7 +28,7 @@ than a copy that could drift.
 | Tool | Parameters | Purpose |
 |---|---|---|
 | `add_item` | `text*`, `priority` | Create a task |
-| `list_items` | `status` | Return the whole list |
+| `list_items` | `status` | Return the list, up to 100 items |
 | `search_items` | `query*`, `status` | Find tasks **and their `item_id`** |
 | `update_item` | `item_id*`, `text`, `status` | Change text and/or status |
 | `delete_item` | `item_id*` | Remove a task |
@@ -68,11 +68,20 @@ arguments = {**tool["input"], USER_ID_ARGUMENT: user_id}
 
 The gateway does not publish `user_id` as a parameter, so the model never sees
 one and has no reason to invent one — and if it does, the merge above puts the
-verified value last. The handler then strips it back out of the arguments before
+injected value last. The handler then strips it back out of the arguments before
 dispatch, so no tool can mistake the caller's name for data
 (`models.py:from_invocation`). Two tests hold the ends together: one asserts a
 model-supplied `user_id` is overwritten, another that the two packages agree on
 the key, since they deploy separately and share only that string.
+
+**There is no default caller.** A tool call that arrives without an identity
+raises `MissingIdentityError` and fails the invocation; a turn that arrives
+without one is refused before the model is called. A fallback would be the one
+bug that silently merges every caller into a single partition — precisely what
+the partition key exists to prevent — so the plumbing failure is made loud
+instead. Tests stand in for the runtime by supplying the identity themselves
+(`tests/conftest.py:create_invocation`), rather than the production code
+defaulting one on their behalf.
 
 ## Design notes
 
@@ -110,7 +119,18 @@ the one that matters.
 **Only spoken turns are persisted.** Converse requires every `toolUse` block to
 be answered by a matching `toolResult` in the same sequence, so replaying
 half-finished tool exchanges out of storage risks a malformed request for no
-benefit. It also halves the memory events a conversation bills for.
+benefit. It also halves the memory events a conversation bills for. Loading
+them back is ordering-sensitive in two ways Converse will reject: `ListEvents`
+answers newest first, so history is *reversed* rather than sorted — a prompt and
+its answer are written back to back and can share a timestamp, and sorting would
+be free to swap them — and the window keeps the newest events, so it can begin
+mid-turn and any leading assistant message is dropped.
+
+**Every read is bounded.** `search_items` returns at most 25 matches and
+`list_items` at most 100 items, each flagging `truncated` so the model can say
+so rather than presenting a partial list as complete. The cap reaches the store,
+not just the response: `list_all` takes a `limit` and stops paging, so a long
+partition is never pulled into the Lambda whole.
 
 **The model is reached through an inference profile**, so IAM grants the
 profile ARN *and* the underlying `foundation-model/*` ARN in every region the
@@ -254,7 +274,7 @@ docs/architecture.svg the diagram above; service glyphs are the official
 
 ```bash
 python -m venv .venv && .venv/bin/pip install \
-  pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy 'ruff<0.16' pre-commit
+  pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy 'ruff==0.15.12' pre-commit
 
 pre-commit install --install-hooks && pre-commit install --hook-type pre-push
 pre-commit run --all-files    # everything the hooks enforce, in one go
