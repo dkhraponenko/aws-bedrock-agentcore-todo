@@ -16,9 +16,10 @@ dev = [
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "pytest-env>=1.1",
-  # Upper-bounded: 0.16 rewrites `# noqa:` suppressions into a new syntax the
-  # pinned pre-commit hook would then have to match. Bump both together.
-  "ruff>=0.15,<0.16",
+  # Pinned exactly to the pre-commit hook's rev, not merely upper-bounded:
+  # 0.15.22 already rewrites `# noqa:` suppressions into a syntax that rev
+  # rejects, so a range wide enough to reach it fails the repo's own hooks.
+  "ruff==0.15.12",
 ]
 
 [tool.ruff]

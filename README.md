@@ -278,10 +278,10 @@ the test suite with a **95% branch-coverage floor** over both source packages
 imports either, so counting them would report a number about the wrong code.
 
 Hook revisions are pinned, and the ruff pin has to match the ruff you run
-locally: 0.16 rewrites `# noqa: RULE` into a new `# ruff: ignore[rule-name]`
-syntax that older ruff rejects, so a floating hook would leave the repo in a
-state its own CLI fails on. `pyproject.toml` carries the matching `<0.16`
-bound.
+locally — exactly, not as a range. 0.15.22 rewrites `# noqa: RULE` into a new
+`# ruff:ignore[rule-name]` syntax that 0.15.12 rejects, so any bound wide
+enough to reach it leaves the repo in a state its own hooks fail on.
+`pyproject.toml` therefore carries `ruff==0.15.12`, the hook's own rev.
 
 ### Verifying without deploying
 
