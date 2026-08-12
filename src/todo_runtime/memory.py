@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from itertools import dropwhile
 from operator import itemgetter
 from typing import Any, Protocol
 
@@ -57,9 +58,22 @@ class ConversationMemory:
             maxResults=MAX_HISTORY_EVENTS,
         )
 
-        # ListEvents returns newest first; Converse needs chronological order.
-        events = sorted(response.get("events", []), key=itemgetter("eventTimestamp"))
-        return [message for event in events for message in _to_messages(event)]
+        # ListEvents answers newest first, so reversing it — not sorting it — is
+        # what recovers chronological order.
+        chronological = list(reversed(response.get("events", [])))
+
+        # The sort is a guard in case that guarantee ever changes. It is stable,
+        # so events sharing a timestamp keep the order above rather than being
+        # flipped back — which matters, because a prompt and its answer are
+        # written back to back and can land in the same instant, and swapping
+        # that pair hands Converse two messages with their roles inverted.
+        events = sorted(chronological, key=itemgetter("eventTimestamp"))
+        messages = [message for event in events for message in _to_messages(event)]
+
+        # The window keeps the newest events, so it can start mid-turn — a turn
+        # whose prompt fell off the end, or one whose answer was never stored.
+        # Converse requires the first message to be the user's.
+        return list(dropwhile(lambda message: message["role"] != "user", messages))
 
     def append(self, actor_id: str, session_id: str, role: str, text: str) -> None:
         """Store one spoken turn. Blank text is skipped rather than stored."""

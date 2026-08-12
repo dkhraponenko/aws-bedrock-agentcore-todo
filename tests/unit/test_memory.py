@@ -41,6 +41,29 @@ def test_history_is_returned_oldest_first(client: MagicMock, memory: Conversatio
     ]
 
 
+def test_a_turn_stored_in_the_same_instant_keeps_its_order(client: MagicMock, memory: ConversationMemory) -> None:
+    """A prompt and its answer are written back to back and can share a timestamp."""
+    client.list_events.return_value = {
+        "events": [event("ASSISTANT", "answer", 1), event("USER", "question", 1)],
+    }
+
+    assert memory.load("alice", "session-1") == [
+        {"role": "user", "content": [{"text": "question"}]},
+        {"role": "assistant", "content": [{"text": "answer"}]},
+    ]
+
+
+def test_history_never_starts_with_an_assistant_turn(client: MagicMock, memory: ConversationMemory) -> None:
+    """Converse requires the first message to be the user's, and the window can cut mid-turn."""
+    client.list_events.return_value = {
+        "events": [event("USER", "second question", 3), event("ASSISTANT", "orphaned answer", 2)],
+    }
+
+    assert memory.load("alice", "session-1") == [
+        {"role": "user", "content": [{"text": "second question"}]},
+    ]
+
+
 def test_load_is_scoped_to_one_actor_and_session(client: MagicMock, memory: ConversationMemory) -> None:
     client.list_events.return_value = {"events": []}
 
