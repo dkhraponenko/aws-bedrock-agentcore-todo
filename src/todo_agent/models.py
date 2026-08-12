@@ -9,8 +9,9 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from todo_agent.errors import MissingIdentityError
 
-DEFAULT_USER_ID = "demo-user"
+
 MIN_PRIORITY = 1
 MAX_PRIORITY = 5
 DEFAULT_PRIORITY = 3
@@ -113,24 +114,33 @@ class ToolInvocation:
 
     @classmethod
     def from_invocation(cls, event: dict[str, Any], context: Any) -> ToolInvocation:  # noqa: ANN401
-        """Parse the gateway's event and untyped LambdaContext into one record."""
+        """Parse the gateway's event and untyped LambdaContext into one record.
+
+        Raises:
+            MissingIdentityError: The invocation carried no `user_id`.
+        """
         client_context = getattr(context, "client_context", None)
         custom = getattr(client_context, "custom", None) or {}
         raw_name = str(custom.get(TOOL_NAME_KEY, ""))
 
         arguments = dict(event or {})
 
+        # Injected by the runtime, merged last over whatever the model produced
+        # and absent from the published schema. Missing means the injection did
+        # not happen — a plumbing failure, not a caller to invent.
+        user_id = str(arguments.get(USER_ID_KEY) or "").strip()
+        if not user_id:
+            msg = (
+                f"Invocation of '{raw_name}' carried no {USER_ID_KEY}. "
+                "Every tool call must arrive with the caller's identity injected by the runtime."
+            )
+            raise MissingIdentityError(msg)
+
         return cls(
             # Drop the target prefix: handlers key off the bare tool name.
             tool_name=raw_name.rpartition(TOOL_NAME_SEPARATOR)[2],
-            # Removed from the arguments: it identifies the caller rather than
-            # describing the task, and leaving it in would let it reach a
-            # handler as if the model had chosen it.
+            # Removed from the arguments: leaving it in would reach a handler
+            # as if the model had chosen it.
             arguments={key: value for key, value in arguments.items() if key != USER_ID_KEY},
-            # Injected by the agent runtime from an identity AWS validated before
-            # the turn began. It is not in the published tool schema, so a model
-            # that invents one is overwritten upstream, never trusted here. The
-            # fallback keeps direct invocations (tests, the offline runner)
-            # working without an identity.
-            user_id=str(arguments.get(USER_ID_KEY) or "").strip() or DEFAULT_USER_ID,
+            user_id=user_id,
         )

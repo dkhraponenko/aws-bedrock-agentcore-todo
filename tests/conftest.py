@@ -10,7 +10,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from todo_agent.models import TOOL_NAME_KEY, TOOL_NAME_SEPARATOR
+from todo_agent.models import TOOL_NAME_KEY, TOOL_NAME_SEPARATOR, USER_ID_KEY
 from todo_agent.service import TodoService
 from todo_agent.store import TodoStore
 
@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 
 TARGET_NAME = "todo"
 TABLE_NAME = os.environ.get("TODO_TABLE_NAME", "todo-agent-items-test")
+
+# The runtime injects the caller's identity into every tool call, and the
+# handler rejects an invocation that arrives without one. Tests stand in for
+# the runtime, so the identity is supplied here rather than defaulted in the
+# production code — pass `user_id=None` to exercise its absence.
+TEST_USER_ID = "demo-user"
 
 
 @dataclass
@@ -41,15 +47,21 @@ def create_invocation(
     tool: str,
     arguments: dict[str, Any] | None = None,
     target: str = TARGET_NAME,
+    user_id: str | None = TEST_USER_ID,
 ) -> tuple[dict[str, Any], FakeLambdaContext]:
     """Build the (event, context) pair AgentCore Gateway would deliver.
 
     The arguments are the whole event; the tool name rides in the client
-    context, prefixed with the gateway target name.
+    context, prefixed with the gateway target name. `user_id` is merged in the
+    way the runtime merges it — last, over anything the model supplied.
     """
     qualified = f"{target}{TOOL_NAME_SEPARATOR}{tool}" if target else tool
     context = FakeLambdaContext(client_context=FakeClientContext(custom={TOOL_NAME_KEY: qualified}))
-    return dict(arguments or {}), context
+
+    event = dict(arguments or {})
+    if user_id is not None:
+        event[USER_ID_KEY] = user_id
+    return event, context
 
 
 @pytest.fixture

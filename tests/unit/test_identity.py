@@ -8,25 +8,24 @@ the same place.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.conftest import create_invocation
+from todo_agent.errors import MissingIdentityError
 from todo_agent.lambda_handler import lambda_handler
-from todo_agent.models import DEFAULT_USER_ID, USER_ID_KEY, ToolInvocation
+from todo_agent.models import USER_ID_KEY, ToolInvocation
 from todo_runtime.agent import USER_ID_ARGUMENT
 
 
 def add_item(user_id: str | None, text: str) -> dict[str, object]:
     """Add one item as a given user, the way the runtime would."""
-    arguments: dict[str, object] = {"text": text}
-    if user_id is not None:
-        arguments[USER_ID_KEY] = user_id
-    event, context = create_invocation("add_item", arguments)
+    event, context = create_invocation("add_item", {"text": text}, user_id=user_id)
     return lambda_handler(event, context)
 
 
 def list_items(user_id: str | None) -> list[str]:
     """The texts one user can see."""
-    arguments = {} if user_id is None else {USER_ID_KEY: user_id}
-    event, context = create_invocation("list_items", arguments)
+    event, context = create_invocation("list_items", user_id=user_id)
     return [item["text"] for item in lambda_handler(event, context)["items"]]
 
 
@@ -43,17 +42,23 @@ def test_items_are_invisible_to_another_user(wired_store: None) -> None:
     assert list_items("bob") == ["bob's bread"]
 
 
-def test_an_absent_identity_falls_back_to_the_default(wired_store: None) -> None:
-    """Direct invocations — tests, the offline driver — still work."""
-    add_item(None, "unattributed")
+@pytest.mark.parametrize("user_id", [None, "", "   "], ids=["absent", "empty", "blank"])
+def test_an_invocation_without_an_identity_is_rejected(user_id: str | None, wired_store: None) -> None:
+    """A default here would merge every caller into one shared partition.
 
-    assert list_items(DEFAULT_USER_ID) == ["unattributed"]
-    assert list_items("alice") == []
+    The identity is injected by the runtime, outside the model's reach, so its
+    absence is a plumbing failure rather than something a retry could fix — it
+    fails the invocation instead of picking a stand-in.
+    """
+    event, context = create_invocation("add_item", {"text": "x"}, user_id=user_id)
+
+    with pytest.raises(MissingIdentityError, match=USER_ID_KEY):
+        lambda_handler(event, context)
 
 
 def test_the_identity_never_reaches_a_handler_as_an_argument() -> None:
     """It names the caller; a tool that saw it might treat it as data."""
-    event, context = create_invocation("add_item", {"text": "x", USER_ID_KEY: "alice"})
+    event, context = create_invocation("add_item", {"text": "x"}, user_id="alice")
 
     invocation = ToolInvocation.from_invocation(event, context)
 

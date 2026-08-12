@@ -72,13 +72,31 @@ def test_events_are_rendered_as_sse(monkeypatch: pytest.MonkeyPatch) -> None:
     assert agent.calls == [("alice", "s-1", "hi")]
 
 
-def test_missing_identity_falls_back_without_failing(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [{"prompt": "hi"}, {"prompt": "hi", "user_id": ""}, {"prompt": "hi", "user_id": "   "}],
+    ids=["absent", "empty", "blank"],
+)
+def test_a_turn_without_an_identity_is_refused(payload: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Everything downstream partitions by this value; there is no safe stand-in."""
     agent = FakeAgent([{"type": "done"}])
     monkeypatch.setattr(AgentService, "_agent", agent)
 
-    list(invoke({"prompt": "hi"}))
+    assert frames(invoke(payload)) == [
+        {"type": "error", "message": "Missing user_id."},
+        {"type": "done"},
+    ]
+    assert agent.calls == []
 
-    assert agent.calls == [(entrypoint.DEFAULT_USER_ID, entrypoint.DEFAULT_SESSION_ID, "hi")]
+
+def test_an_absent_session_still_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session names a conversation, not a caller — defaulting one is safe."""
+    agent = FakeAgent([{"type": "done"}])
+    monkeypatch.setattr(AgentService, "_agent", agent)
+
+    list(invoke({"prompt": "hi", "user_id": "alice"}))
+
+    assert agent.calls == [("alice", entrypoint.DEFAULT_SESSION_ID, "hi")]
 
 
 @pytest.mark.parametrize("payload", [{}, {"prompt": "   "}], ids=["absent", "blank"])

@@ -31,7 +31,9 @@ if TYPE_CHECKING:
 logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_ID = "anonymous"
+# A session names a conversation, so defaulting one is harmless. There is no
+# equivalent default for the caller: every store below partitions by that
+# value, and a stand-in would put unrelated people in one partition.
 DEFAULT_SESSION_ID = "default"
 
 
@@ -89,6 +91,8 @@ class AgentService:
 
         Args:
             payload: `{"prompt": str, "user_id": str, "session_id": str}`.
+                `prompt` and `user_id` are both required; a turn missing either
+                is answered with an error frame rather than a substituted value.
 
         Yields:
             `data: {...}` frames, ending with a `done` event.
@@ -101,11 +105,17 @@ class AgentService:
             raise RuntimeError(msg)
 
         prompt = str(payload.get("prompt", "")).strip()
-        user_id = str(payload.get("user_id") or DEFAULT_USER_ID)
+        user_id = str(payload.get("user_id") or "").strip()
         session_id = str(payload.get("session_id") or DEFAULT_SESSION_ID)
 
         if not prompt:
             yield _frame({"type": "error", "message": "Empty prompt."})
+            yield _frame({"type": "done"})
+            return
+
+        if not user_id:
+            logger.error("Refused a turn with no caller identity")
+            yield _frame({"type": "error", "message": "Missing user_id."})
             yield _frame({"type": "done"})
             return
 

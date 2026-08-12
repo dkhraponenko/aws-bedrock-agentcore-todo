@@ -23,6 +23,16 @@ class ItemNotFoundError(TodoError):
         super().__init__(f"No item found with item_id '{item_id}'")
 
 
+class MissingIdentityError(Exception):
+    """The invocation carried no caller identity.
+
+    Deliberately not a `TodoError`: the model neither supplies this value nor
+    sees it, so its absence is a plumbing failure, not something a retried call
+    could correct. Failing beats defaulting, which would merge every caller into
+    one partition.
+    """
+
+
 class UnknownFunctionError(TodoError):
     """The agent invoked a tool this Lambda does not implement."""
 

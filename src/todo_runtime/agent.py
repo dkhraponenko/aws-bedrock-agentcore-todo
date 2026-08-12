@@ -1,8 +1,8 @@
-"""The agent loop: model, tools, memory — the part the managed harness used to own.
+"""The agent loop: model, tools, memory.
 
-Owning it is what makes per-user isolation possible. The user's identity is
-verified before this code runs and is injected into every tool call here, so it
-is never something the model chooses or could be talked into changing.
+Owning the loop is what makes per-user isolation possible: the identity arrives
+with the turn and is injected into every tool call here, never chosen by the
+model. Who may supply it is the trust boundary in `todo_runtime.entrypoint`.
 """
 
 from __future__ import annotations
@@ -23,9 +23,8 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 
-# Added to every tool call from the verified caller identity. The gateway does
-# not publish it as a parameter, so the model neither sees it nor can supply
-# one that survives — the merge below puts this last on purpose.
+# Injected into every tool call. The gateway does not publish it as a parameter,
+# so the model neither sees it nor can supply one that survives the merge.
 USER_ID_ARGUMENT = "user_id"
 
 
@@ -162,7 +161,8 @@ class TodoAgent:
         """Answer one user message, yielding events as they happen.
 
         Args:
-            user_id: The verified caller. Partitions both memory and the table.
+            user_id: The caller this turn acts as, taken from the payload rather
+                than established here. Partitions both memory and the table.
             session_id: The conversation this message belongs to.
             prompt: What the user said.
 
@@ -215,7 +215,11 @@ class TodoAgent:
         yield {"type": "done"}
 
     def _invoke(self, user_id: str, tool: dict[str, Any]) -> dict[str, Any]:
-        """Call one tool with the caller's identity forced into its arguments."""
+        """Call one tool with the caller's identity forced into its arguments.
+
+        The tool rejects a call without one, so a loop that stopped injecting it
+        would fail loudly rather than quietly share a list.
+        """
         arguments = {**tool["input"], USER_ID_ARGUMENT: user_id}
         logger.info("Calling tool", extra={"tool": tool["name"], "user_id": user_id})
         return self._gateway.call_tool(tool["name"], arguments)
