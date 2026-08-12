@@ -94,6 +94,10 @@ class TodoItem:
 TOOL_NAME_KEY = "bedrockAgentCoreToolName"
 TOOL_NAME_SEPARATOR = "___"
 
+# Carries the caller's identity alongside the tool's own arguments. The gateway
+# does not publish it as a parameter, so it can only have come from the runtime.
+USER_ID_KEY = "user_id"
+
 
 @dataclass(frozen=True)
 class ToolInvocation:
@@ -114,10 +118,19 @@ class ToolInvocation:
         custom = getattr(client_context, "custom", None) or {}
         raw_name = str(custom.get(TOOL_NAME_KEY, ""))
 
+        arguments = dict(event or {})
+
         return cls(
             # Drop the target prefix: handlers key off the bare tool name.
             tool_name=raw_name.rpartition(TOOL_NAME_SEPARATOR)[2],
-            arguments=dict(event or {}),
-            # No identity channel in the invocation, so every caller shares one list.
-            user_id=DEFAULT_USER_ID,
+            # Removed from the arguments: it identifies the caller rather than
+            # describing the task, and leaving it in would let it reach a
+            # handler as if the model had chosen it.
+            arguments={key: value for key, value in arguments.items() if key != USER_ID_KEY},
+            # Injected by the agent runtime from an identity AWS validated before
+            # the turn began. It is not in the published tool schema, so a model
+            # that invents one is overwritten upstream, never trusted here. The
+            # fallback keeps direct invocations (tests, the offline runner)
+            # working without an identity.
+            user_id=str(arguments.get(USER_ID_KEY) or "").strip() or DEFAULT_USER_ID,
         )

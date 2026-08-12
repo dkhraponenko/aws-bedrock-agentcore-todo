@@ -26,6 +26,9 @@ target-version = "py313"
 line-length = 120
 indent-width = 4
 src = ["src", "tests", "scripts"]
+# docs/build_diagram.py is a one-shot image generator whose body is an SVG
+# document; line length and argument counts describe the drawing, not the code.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["E", "F"]
@@ -90,6 +93,7 @@ allow_untyped_globals = false
 allow_redefinition = false
 strict_equality = true
 show_error_codes = true
+exclude = ["docs"]
 
 [tool.pytest.ini_options]
 # "." so tests can import the plain helper functions out of tests/conftest.py.
@@ -103,11 +107,18 @@ markers = ["e2e: hits real AWS; excluded from the default run"]
 [tool.pytest_env]
 AWS_DEFAULT_REGION = "us-east-1"
 TODO_TABLE_NAME = "todo-agent-items-test"
+# todo_runtime validates its settings at import, which is what production wants
+# and what a test run has to satisfy. Supplying them here keeps the alternative
+# — a test-detection branch in the module itself — out of the source.
+GATEWAY_URL = "https://gateway.invalid/mcp"
+MEMORY_ID = "memory-test"
+AGENT_MODEL = "us.amazon.nova-pro-v1:0"
+AGENT_INSTRUCTION = "You are a todo assistant."
 
 [tool.coverage.run]
-# Only the deployment package. scripts/ is developer tooling that no test
+# Only the deployment packages. scripts/ is developer tooling that no test
 # imports; counting it would report a number about the wrong code.
-source = ["src/todo_agent"]
+source = ["src/todo_agent", "src/todo_runtime"]
 branch = true
 
 [tool.coverage.report]

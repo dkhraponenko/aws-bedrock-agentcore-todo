@@ -4,20 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-import boto3
 import pytest
-from moto import mock_aws
 
-from tests.conftest import TABLE_NAME, create_invocation
+from tests.conftest import create_invocation
 from todo_agent.lambda_handler import lambda_handler
-from todo_agent.service import TOOL_NAMES, TodoService
-from todo_agent.store import TodoStore
-
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
+from todo_agent.service import TOOL_NAMES
 
 
 TOOLS_FILE = Path(__file__).resolve().parents[2] / "infrastructure" / "tools.json"
@@ -29,27 +22,6 @@ SAMPLE_VALUES: dict[str, Any] = {"string": "x", "integer": 1}
 
 def required_names(tool: dict[str, Any]) -> list[str]:
     return [prop["name"] for prop in tool["properties"] if prop["required"]]
-
-
-@pytest.fixture
-def wired_store(aws_credentials: None) -> Generator[None]:
-    """Back the handler with a moto table so tool calls reach real validation."""
-    with mock_aws():
-        client = boto3.client("dynamodb", region_name="us-east-1")
-        client.create_table(
-            TableName=TABLE_NAME,
-            KeySchema=[
-                {"AttributeName": "user_id", "KeyType": "HASH"},
-                {"AttributeName": "item_id", "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": "user_id", "AttributeType": "S"},
-                {"AttributeName": "item_id", "AttributeType": "S"},
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        TodoService.setup(TodoStore(table_name=TABLE_NAME, dynamodb_client=client))
-        yield
 
 
 def test_declared_tools_match_implemented_handlers() -> None:

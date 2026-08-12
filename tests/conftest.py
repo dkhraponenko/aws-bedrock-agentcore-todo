@@ -6,10 +6,13 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import boto3
 import pytest
+from moto import mock_aws
 
 from todo_agent.models import TOOL_NAME_KEY, TOOL_NAME_SEPARATOR
 from todo_agent.service import TodoService
+from todo_agent.store import TodoStore
 
 
 if TYPE_CHECKING:
@@ -61,6 +64,27 @@ def reset_service() -> Generator[None]:
     TodoService._store = None
     yield
     TodoService._store = None
+
+
+@pytest.fixture
+def wired_store(aws_credentials: None) -> Generator[None]:
+    """Back the handler with a moto table so tool calls reach real validation."""
+    with mock_aws():
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        client.create_table(
+            TableName=TABLE_NAME,
+            KeySchema=[
+                {"AttributeName": "user_id", "KeyType": "HASH"},
+                {"AttributeName": "item_id", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "user_id", "AttributeType": "S"},
+                {"AttributeName": "item_id", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        TodoService.setup(TodoStore(table_name=TABLE_NAME, dynamodb_client=client))
+        yield
 
 
 @pytest.fixture
