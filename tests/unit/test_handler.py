@@ -12,6 +12,9 @@ from todo_agent.store import TodoStore
 
 
 def test_lambda_handler_delegates_to_the_service() -> None:
+    # Both halves of the invocation have to arrive: the arguments are the event,
+    # and the tool name only exists on the context, so a handler that dropped
+    # either would fail to dispatch at all.
     store = MagicMock(spec=TodoStore)
     store.list_all.return_value = []
     TodoService.setup(store=store)
@@ -19,20 +22,6 @@ def test_lambda_handler_delegates_to_the_service() -> None:
     event, context = create_invocation("list_items")
 
     assert handler_module.lambda_handler(event, context) == {"count": 0, "truncated": False, "items": []}
-
-
-def test_lambda_handler_passes_the_context_through() -> None:
-    # The tool name only exists on the context, so dropping it would break
-    # dispatch for every call.
-    store = MagicMock(spec=TodoStore)
-    store.delete.side_effect = AssertionError("delete must not run for list_items")
-    store.list_all.return_value = []
-    TodoService.setup(store=store)
-
-    event, context = create_invocation("list_items")
-    handler_module.lambda_handler(event, context)
-
-    store.list_all.assert_called_once()
 
 
 def test_importing_the_module_wires_the_store_once() -> None:

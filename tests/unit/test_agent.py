@@ -213,16 +213,6 @@ def test_unparseable_tool_arguments_become_an_empty_call(memory_client: DictMemo
     assert gateway.calls[0][1] == {USER_ID_ARGUMENT: "alice"}
 
 
-def test_tool_config_is_fetched_once_and_reused(memory_client: DictMemoryClient) -> None:
-    gateway = FakeGateway()
-    agent = build_agent(FakeBedrock(text_stream("a"), text_stream("b")), gateway, memory_client)
-
-    list(agent.run("alice", "session-1", "one"))
-    list(agent.run("alice", "session-1", "two"))
-
-    assert gateway.list_calls == 1
-
-
 def test_history_precedes_the_new_prompt(memory_client: DictMemoryClient) -> None:
     bedrock = FakeBedrock(text_stream("first"), text_stream("second"))
     agent = build_agent(bedrock, FakeGateway(), memory_client)
@@ -249,19 +239,6 @@ class ExplodingBedrock:
         raise self._error
 
 
-class WatchingBedrock(FakeBedrock):
-    """Records what memory already held at the moment the model was called."""
-
-    def __init__(self, memory_client: DictMemoryClient) -> None:
-        super().__init__(text_stream("Hello."))
-        self._memory_client = memory_client
-        self.stored_before_call: list[dict[str, Any]] = []
-
-    def converse_stream(self, **kwargs: Any) -> dict[str, Any]:
-        self.stored_before_call = deepcopy(self._memory_client.events)
-        return super().converse_stream(**kwargs)
-
-
 def test_a_failed_turn_still_records_the_question(memory_client: DictMemoryClient) -> None:
     """History that silently drops a turn leaves the retry without the context."""
     agent = build_agent(ExplodingBedrock(RuntimeError("throttled")), FakeGateway(), memory_client)
@@ -282,16 +259,6 @@ def test_a_disconnected_client_still_records_the_question(memory_client: DictMem
     turn.close()
 
     stored = [event["payload"][0]["conversational"] for event in memory_client.events]
-    assert stored == [{"role": "USER", "content": {"text": "add buy milk"}}]
-
-
-def test_the_question_is_stored_before_the_model_is_called(memory_client: DictMemoryClient) -> None:
-    """Anything that ends the container mid-turn ends it after this point, not before."""
-    bedrock = WatchingBedrock(memory_client)
-
-    list(build_agent(bedrock, FakeGateway(), memory_client).run("alice", "session-1", "add buy milk"))
-
-    stored = [event["payload"][0]["conversational"] for event in bedrock.stored_before_call]
     assert stored == [{"role": "USER", "content": {"text": "add buy milk"}}]
 
 

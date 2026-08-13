@@ -88,12 +88,11 @@ def test_search_stops_scanning_at_the_cap(monkeypatch: pytest.MonkeyPatch) -> No
     assert client.query.call_count == 1, "the second page must never be fetched"
 
 
-def test_search_stops_once_enough_matches_are_found(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_stops_once_enough_matches_are_found() -> None:
     client = MagicMock(spec=DynamoDBClient)
     client.query.side_effect = [
         {"Items": [attribute_map("a", "milk"), attribute_map("b", "more milk")]},
     ]
-    monkeypatch.setattr(store_module, "SEARCH_SCAN_LIMIT", 100)
     store = TodoStore(table_name="t", dynamodb_client=client)
 
     result = store.search(USER, "milk", limit=1)
