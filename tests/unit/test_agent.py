@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from todo_runtime.agent import USER_ID_ARGUMENT, AgentConfig, TodoAgent
+from todo_runtime.agent import FAILED_TURN_NOTE, USER_ID_ARGUMENT, AgentConfig, BedrockRuntime, TodoAgent
 from todo_runtime.memory import ConversationMemory
 
 
@@ -101,7 +101,7 @@ def memory_client() -> DictMemoryClient:
 
 
 def build_agent(
-    bedrock: FakeBedrock,
+    bedrock: BedrockRuntime,
     gateway: FakeGateway,
     memory_client: DictMemoryClient,
     max_iterations: int = 10,
@@ -184,8 +184,9 @@ def test_text_alongside_a_tool_call_is_kept_in_order(memory_client: DictMemoryCl
     assert replayed[0] == {"text": "Let me check. "}
     assert replayed[1]["toolUse"]["name"] == TOOL_NAME
     assert len(gateway.calls) == 1
-    # Both narrations reach memory as one assistant turn.
-    assert memory_client.events[-1]["payload"][0]["conversational"]["content"]["text"] == "Let me check. Added."
+    # Only the last pass is the answer: "Let me check. " was the model narrating
+    # before a tool call, and replaying it as something it said would be wrong.
+    assert memory_client.events[-1]["payload"][0]["conversational"]["content"]["text"] == "Added."
     assert {"type": "text", "text": "Let me check. "} in events
 
 
@@ -231,6 +232,46 @@ def test_history_precedes_the_new_prompt(memory_client: DictMemoryClient) -> Non
         {"role": "assistant", "content": [{"text": "first"}]},
         {"role": "user", "content": [{"text": "two"}]},
     ]
+
+
+class ExplodingBedrock:
+    """Fails the way a throttled or unreachable model does."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.requests: list[dict[str, Any]] = []
+
+    def converse_stream(self, **kwargs: Any) -> dict[str, Any]:
+        self.requests.append(dict(kwargs))
+        raise self._error
+
+
+def test_a_failed_turn_still_records_the_question(memory_client: DictMemoryClient) -> None:
+    """History that silently drops a turn leaves the retry without the context."""
+    agent = build_agent(ExplodingBedrock(RuntimeError("throttled")), FakeGateway(), memory_client)
+
+    with pytest.raises(RuntimeError, match="throttled"):
+        list(agent.run("alice", "session-1", "delete the milk one"))
+
+    stored = [event["payload"][0]["conversational"] for event in memory_client.events]
+    assert stored == [
+        {"role": "USER", "content": {"text": "delete the milk one"}},
+        {"role": "ASSISTANT", "content": {"text": FAILED_TURN_NOTE}},
+    ]
+
+
+def test_a_failed_turn_keeps_history_in_alternating_pairs(memory_client: DictMemoryClient) -> None:
+    """Converse rejects two user messages in a row, which a bare prompt would create."""
+    failing = build_agent(ExplodingBedrock(RuntimeError("throttled")), FakeGateway(), memory_client)
+    with pytest.raises(RuntimeError, match="throttled"):
+        list(failing.run("alice", "session-1", "delete the milk one"))
+
+    retry = build_agent(FakeBedrock(text_stream("Deleted.")), FakeGateway(), memory_client)
+    list(retry.run("alice", "session-1", "try again"))
+
+    history = ConversationMemory(memory_client, memory_id="memory-test").load("alice", "session-1")
+
+    assert [message["role"] for message in history] == ["user", "assistant", "user", "assistant"]
 
 
 def test_history_is_not_shared_between_users(memory_client: DictMemoryClient) -> None:

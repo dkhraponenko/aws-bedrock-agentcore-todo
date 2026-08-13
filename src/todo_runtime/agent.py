@@ -23,8 +23,14 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 
-# Injected into every tool call. The gateway does not publish it as a parameter,
-# so the model neither sees it nor can supply one that survives the merge.
+# Stored in place of an answer when a turn dies mid-flight. History has to stay
+# in user/assistant pairs — Converse rejects two user messages in a row — so a
+# failed turn cannot just record the question and stop there.
+FAILED_TURN_NOTE = "(this turn failed before it could answer)"
+
+# Added to every tool call from the identity this turn was invoked for. The
+# gateway does not publish it as a parameter, so the model neither sees it nor
+# can supply one that survives — the merge below puts this last on purpose.
 USER_ID_ARGUMENT = "user_id"
 
 
@@ -168,51 +174,79 @@ class TodoAgent:
 
         Yields:
             `text`, `tool_use`, `tool_result`, `error` and a final `done` event.
+
+        Raises:
+            Exception: Whatever the model or a tool raised, after the turn has
+                been recorded as failed. The entry point renders it as an error
+                frame; re-raising keeps that decision in one place.
         """
         messages = [
             *self._memory.load(user_id, session_id),
             {"role": "user", "content": [{"text": prompt}]},
         ]
-        answer: list[str] = []
+        answer = ""
 
-        for _ in range(self._config.max_iterations):
-            streamed = _StreamedMessage()
-            response = self._bedrock.converse_stream(
-                modelId=self._config.model_id,
-                system=self._system,
-                messages=messages,
-                toolConfig=self.tool_config(),
-            )
-            for event in response["stream"]:
-                for update in streamed.consume(event):
-                    if update["type"] == "text":
-                        answer.append(update["text"])
-                    yield update
+        try:
+            for _ in range(self._config.max_iterations):
+                # Each pass replaces the answer rather than adding to it: text
+                # from an earlier pass is the model narrating before a tool
+                # call, and replaying that as something it said to the user is
+                # both wrong and billed for on every later turn.
+                spoken: list[str] = []
+                streamed = _StreamedMessage()
 
-            messages.append({"role": "assistant", "content": streamed.content})
-            if streamed.stop_reason != "tool_use":
-                break
-
-            results = []
-            for block in streamed.content:
-                if (tool := block.get("toolUse")) is None:
-                    continue
-                result = self._invoke(user_id, tool)
-                yield {"type": "tool_result", "name": tool["name"], "result": result}
-                results.append(
-                    {
-                        "toolResult": {"toolUseId": tool["toolUseId"], "content": [{"json": result}]},
-                    }
+                response = self._bedrock.converse_stream(
+                    modelId=self._config.model_id,
+                    system=self._system,
+                    messages=messages,
+                    toolConfig=self.tool_config(),
                 )
-            messages.append({"role": "user", "content": results})
-        else:
-            cap = self._config.max_iterations
-            logger.warning("Turn hit the iteration cap", extra={"user_id": user_id, "cap": cap})
-            yield {"type": "error", "message": f"Stopped after {cap} steps without finishing."}
+                for event in response["stream"]:
+                    for update in streamed.consume(event):
+                        if update["type"] == "text":
+                            spoken.append(update["text"])
+                        yield update
 
-        self._memory.append(user_id, session_id, "user", prompt)
-        self._memory.append(user_id, session_id, "assistant", "".join(answer))
+                answer = "".join(spoken)
+                messages.append({"role": "assistant", "content": streamed.content})
+                if streamed.stop_reason != "tool_use":
+                    break
+
+                yield from self._run_tools(user_id, streamed.content, messages)
+            else:
+                cap = self._config.max_iterations
+                logger.warning("Turn hit the iteration cap", extra={"user_id": user_id, "cap": cap})
+                yield {"type": "error", "message": f"Stopped after {cap} steps without finishing."}
+        except Exception:
+            # The question was asked even though it went unanswered. Dropping it
+            # would leave the user's retry without the context they already gave.
+            logger.warning("Recorded a failed turn", extra={"user_id": user_id})
+            self._remember(user_id, session_id, prompt, FAILED_TURN_NOTE)
+            raise
+
+        self._remember(user_id, session_id, prompt, answer)
         yield {"type": "done"}
+
+    def _remember(self, user_id: str, session_id: str, prompt: str, answer: str) -> None:
+        """Store one turn as the user/assistant pair the history is made of."""
+        self._memory.append(user_id, session_id, "user", prompt)
+        self._memory.append(user_id, session_id, "assistant", answer)
+
+    def _run_tools(
+        self,
+        user_id: str,
+        content: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+    ) -> Iterator[dict[str, Any]]:
+        """Invoke every tool the model asked for, appending the results as one turn."""
+        results = []
+        for block in content:
+            if (tool := block.get("toolUse")) is None:
+                continue
+            result = self._invoke(user_id, tool)
+            yield {"type": "tool_result", "name": tool["name"], "result": result}
+            results.append({"toolResult": {"toolUseId": tool["toolUseId"], "content": [{"json": result}]}})
+        messages.append({"role": "user", "content": results})
 
     def _invoke(self, user_id: str, tool: dict[str, Any]) -> dict[str, Any]:
         """Call one tool with the caller's identity forced into its arguments.
