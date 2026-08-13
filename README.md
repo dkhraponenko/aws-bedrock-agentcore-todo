@@ -126,17 +126,22 @@ benefit. It also halves the memory events a conversation bills for.
 What counts as the turn is the *last* pass of the loop. A tool call takes at
 least two passes — "let me look", then the answer — and storing the
 concatenation would replay the model's own scaffolding back to it as something
-it had said. A turn that dies mid-flight is recorded too, as the question plus
-an explicit note that it went unanswered: dropping it would leave the retry
-without the context the user already gave, and recording the question alone
-would put two user messages in a row, which Converse rejects.
+it had said.
 
-Loading
-them back is ordering-sensitive in two ways Converse will reject: `ListEvents`
-answers newest first, so history is *reversed* rather than sorted — a prompt and
-its answer are written back to back and can share a timestamp, and sorting would
-be free to swap them — and the window keeps the newest events, so it can begin
-mid-turn and any leading assistant message is dropped.
+**The question is stored before the model runs, not after it answers.** A turn
+can end without reaching its last line — the model throttles, a tool times out,
+the client hangs up and the runtime closes the stream, the container goes away
+mid-turn — and of everything in flight the question is the only part that cannot
+be reconstructed afterwards.
+
+Loading history back is ordering-sensitive in three ways Converse will reject.
+`ListEvents` answers newest first, so history is *reversed* rather than sorted —
+two events can share a timestamp and sorting would be free to swap them. The
+window keeps the newest events, so it can begin mid-turn, and any leading
+assistant message is dropped. And a turn whose answer was never stored is closed
+with an explicit note: dropping the question would leave the retry without the
+context the user already gave, and keeping it alone would put two user messages
+in a row.
 
 **Every read is bounded, in the store and not just in the response.**
 `list_items` returns at most 100 items and `search_items` at most 25 matches,
