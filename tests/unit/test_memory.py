@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from todo_runtime.memory import MAX_HISTORY_EVENTS, ConversationMemory, MemoryClient
+from todo_runtime.memory import FAILED_TURN_NOTE, MAX_HISTORY_EVENTS, ConversationMemory, MemoryClient
 
 
 def event(role: str, text: str, minute: int) -> dict[str, Any]:
@@ -59,8 +59,11 @@ def test_history_never_starts_with_an_assistant_turn(client: MagicMock, memory: 
         "events": [event("USER", "second question", 3), event("ASSISTANT", "orphaned answer", 2)],
     }
 
+    # The trailing question is paired below; what this pins is that the answer
+    # whose question fell off the window does not become the first message.
     assert memory.load("alice", "session-1") == [
         {"role": "user", "content": [{"text": "second question"}]},
+        {"role": "assistant", "content": [{"text": FAILED_TURN_NOTE}]},
     ]
 
 
@@ -114,3 +117,27 @@ def test_blank_turns_are_not_stored(client: MagicMock, memory: ConversationMemor
     memory.append("alice", "session-1", "assistant", "   ")
 
     client.create_event.assert_not_called()
+
+
+def test_an_unanswered_question_is_paired_with_a_note(client: MagicMock, memory: ConversationMemory) -> None:
+    """The prompt is stored before the model runs, so a dead turn leaves it unanswered."""
+    client.list_events.return_value = {"events": [event("USER", "delete the milk one", 1)]}
+
+    assert memory.load("alice", "session-1") == [
+        {"role": "user", "content": [{"text": "delete the milk one"}]},
+        {"role": "assistant", "content": [{"text": FAILED_TURN_NOTE}]},
+    ]
+
+
+def test_an_unanswered_question_mid_history_is_paired(client: MagicMock, memory: ConversationMemory) -> None:
+    """Converse rejects two user messages in a row, whichever turn died."""
+    client.list_events.return_value = {
+        "events": [event("ASSISTANT", "Deleted.", 3), event("USER", "try again", 2), event("USER", "delete it", 1)],
+    }
+
+    assert [message["role"] for message in memory.load("alice", "session-1")] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]

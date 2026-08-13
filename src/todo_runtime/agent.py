@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator, Iterator
 
     from todo_runtime.memory import ConversationMemory
 
@@ -24,14 +24,8 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 10
 
-# Stored in place of an answer when a turn dies mid-flight. History has to stay
-# in user/assistant pairs — Converse rejects two user messages in a row — so a
-# failed turn cannot just record the question and stop there.
-FAILED_TURN_NOTE = "(this turn failed before it could answer)"
-
-# Added to every tool call from the identity this turn was invoked for. The
-# gateway does not publish it as a parameter, so the model neither sees it nor
-# can supply one that survives — the merge below puts this last on purpose.
+# Injected into every tool call. The gateway does not publish it as a parameter,
+# so the model neither sees it nor can supply one that survives the merge.
 USER_ID_ARGUMENT = "user_id"
 
 
@@ -169,74 +163,61 @@ class TodoAgent:
                 }
             return self._tool_config
 
-    def run(self, user_id: str, session_id: str, prompt: str) -> Iterator[dict[str, Any]]:
+    def run(self, user_id: str, session_id: str, prompt: str) -> Generator[dict[str, Any]]:
         """Answer one user message, yielding events as they happen.
 
-        Args:
-            user_id: The caller this turn acts as, taken from the payload rather
-                than established here. Partitions both memory and the table.
-            session_id: The conversation this message belongs to.
-            prompt: What the user said.
+        `user_id` is taken from the payload, not established here, and partitions
+        both memory and the table.
 
         Yields:
             `text`, `tool_use`, `tool_result`, `error` and a final `done` event.
 
         Raises:
-            Exception: Whatever the model or a tool raised, after the turn has
-                been recorded as failed. The entry point renders it as an error
-                frame; re-raising keeps that decision in one place.
+            Exception: Whatever the model or a tool raised; the entry point
+                renders it, keeping that decision in one place.
         """
         messages = [
             *self._memory.load(user_id, session_id),
             {"role": "user", "content": [{"text": prompt}]},
         ]
+
+        # Stored before the model runs: everything below can end early, and the
+        # question is the one part that cannot be reconstructed. `load` fills in
+        # the missing answer.
+        self._memory.append(user_id, session_id, "user", prompt)
         answer = ""
 
-        try:
-            for _ in range(self._config.max_iterations):
-                # Each pass replaces the answer rather than adding to it: text
-                # from an earlier pass is the model narrating before a tool
-                # call, and replaying that as something it said to the user is
-                # both wrong and billed for on every later turn.
-                spoken: list[str] = []
-                streamed = _StreamedMessage()
+        for _ in range(self._config.max_iterations):
+            # Each pass replaces the answer: earlier text is the model
+            # narrating before a tool call, not something it said.
+            spoken: list[str] = []
+            streamed = _StreamedMessage()
 
-                response = self._bedrock.converse_stream(
-                    modelId=self._config.model_id,
-                    system=self._system,
-                    messages=messages,
-                    toolConfig=self.tool_config(),
-                )
-                for event in response["stream"]:
-                    for update in streamed.consume(event):
-                        if update["type"] == "text":
-                            spoken.append(update["text"])
-                        yield update
+            response = self._bedrock.converse_stream(
+                modelId=self._config.model_id,
+                system=self._system,
+                messages=messages,
+                toolConfig=self.tool_config(),
+            )
+            for event in response["stream"]:
+                for update in streamed.consume(event):
+                    if update["type"] == "text":
+                        spoken.append(update["text"])
+                    yield update
 
-                answer = "".join(spoken)
-                messages.append({"role": "assistant", "content": streamed.content})
-                if streamed.stop_reason != "tool_use":
-                    break
+            answer = "".join(spoken)
+            messages.append({"role": "assistant", "content": streamed.content})
+            if streamed.stop_reason != "tool_use":
+                break
 
-                yield from self._run_tools(user_id, streamed.content, messages)
-            else:
-                cap = self._config.max_iterations
-                logger.warning("Turn hit the iteration cap", extra={"user_id": user_id, "cap": cap})
-                yield {"type": "error", "message": f"Stopped after {cap} steps without finishing."}
-        except Exception:
-            # The question was asked even though it went unanswered. Dropping it
-            # would leave the user's retry without the context they already gave.
-            logger.warning("Recorded a failed turn", extra={"user_id": user_id})
-            self._remember(user_id, session_id, prompt, FAILED_TURN_NOTE)
-            raise
+            yield from self._run_tools(user_id, streamed.content, messages)
+        else:
+            cap = self._config.max_iterations
+            logger.warning("Turn hit the iteration cap", extra={"user_id": user_id, "cap": cap})
+            yield {"type": "error", "message": f"Stopped after {cap} steps without finishing."}
 
-        self._remember(user_id, session_id, prompt, answer)
-        yield {"type": "done"}
-
-    def _remember(self, user_id: str, session_id: str, prompt: str, answer: str) -> None:
-        """Store one turn as the user/assistant pair the history is made of."""
-        self._memory.append(user_id, session_id, "user", prompt)
         self._memory.append(user_id, session_id, "assistant", answer)
+        yield {"type": "done"}
 
     def _run_tools(
         self,

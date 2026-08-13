@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from todo_runtime.agent import FAILED_TURN_NOTE, USER_ID_ARGUMENT, AgentConfig, BedrockRuntime, TodoAgent
+from todo_runtime.agent import USER_ID_ARGUMENT, AgentConfig, BedrockRuntime, TodoAgent
 from todo_runtime.memory import ConversationMemory
 
 
@@ -249,6 +249,19 @@ class ExplodingBedrock:
         raise self._error
 
 
+class WatchingBedrock(FakeBedrock):
+    """Records what memory already held at the moment the model was called."""
+
+    def __init__(self, memory_client: DictMemoryClient) -> None:
+        super().__init__(text_stream("Hello."))
+        self._memory_client = memory_client
+        self.stored_before_call: list[dict[str, Any]] = []
+
+    def converse_stream(self, **kwargs: Any) -> dict[str, Any]:
+        self.stored_before_call = deepcopy(self._memory_client.events)
+        return super().converse_stream(**kwargs)
+
+
 def test_a_failed_turn_still_records_the_question(memory_client: DictMemoryClient) -> None:
     """History that silently drops a turn leaves the retry without the context."""
     agent = build_agent(ExplodingBedrock(RuntimeError("throttled")), FakeGateway(), memory_client)
@@ -257,10 +270,29 @@ def test_a_failed_turn_still_records_the_question(memory_client: DictMemoryClien
         list(agent.run("alice", "session-1", "delete the milk one"))
 
     stored = [event["payload"][0]["conversational"] for event in memory_client.events]
-    assert stored == [
-        {"role": "USER", "content": {"text": "delete the milk one"}},
-        {"role": "ASSISTANT", "content": {"text": FAILED_TURN_NOTE}},
-    ]
+    assert stored == [{"role": "USER", "content": {"text": "delete the milk one"}}]
+
+
+def test_a_disconnected_client_still_records_the_question(memory_client: DictMemoryClient) -> None:
+    """Abandoning the stream closes the generator, which is not an Exception."""
+    agent = build_agent(FakeBedrock(text_stream("Hello.")), FakeGateway(), memory_client)
+
+    turn = agent.run("alice", "session-1", "add buy milk")
+    assert next(turn) == {"type": "text", "text": "Hello."}
+    turn.close()
+
+    stored = [event["payload"][0]["conversational"] for event in memory_client.events]
+    assert stored == [{"role": "USER", "content": {"text": "add buy milk"}}]
+
+
+def test_the_question_is_stored_before_the_model_is_called(memory_client: DictMemoryClient) -> None:
+    """Anything that ends the container mid-turn ends it after this point, not before."""
+    bedrock = WatchingBedrock(memory_client)
+
+    list(build_agent(bedrock, FakeGateway(), memory_client).run("alice", "session-1", "add buy milk"))
+
+    stored = [event["payload"][0]["conversational"] for event in bedrock.stored_before_call]
+    assert stored == [{"role": "USER", "content": {"text": "add buy milk"}}]
 
 
 def test_a_failed_turn_keeps_history_in_alternating_pairs(memory_client: DictMemoryClient) -> None:

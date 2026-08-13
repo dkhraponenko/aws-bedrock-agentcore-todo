@@ -10,15 +10,22 @@ import logging
 from datetime import UTC, datetime
 from itertools import dropwhile
 from operator import itemgetter
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
 
 
 logger = logging.getLogger(__name__)
 
-# One turn is a user message plus an assistant message, so this is the last
-# dozen turns — enough context to resolve "delete that one" without resending
-# an unbounded transcript on every call.
+# A turn is two messages, so this is the last dozen: enough to resolve "delete
+# that one" without resending an unbounded transcript.
 MAX_HISTORY_EVENTS = 24
+
+# Stands in for an answer that was never stored: the question is written before
+# the model runs, and Converse rejects two user messages in a row.
+FAILED_TURN_NOTE = "(this turn failed before it could answer)"
 
 _TO_MEMORY_ROLE = {"user": "USER", "assistant": "ASSISTANT"}
 _FROM_MEMORY_ROLE = {"USER": "user", "ASSISTANT": "assistant"}
@@ -62,18 +69,15 @@ class ConversationMemory:
         # what recovers chronological order.
         chronological = list(reversed(response.get("events", [])))
 
-        # The sort is a guard in case that guarantee ever changes. It is stable,
-        # so events sharing a timestamp keep the order above rather than being
-        # flipped back — which matters, because a prompt and its answer are
-        # written back to back and can land in the same instant, and swapping
-        # that pair hands Converse two messages with their roles inverted.
+        # A guard in case that changes. Stable, so events sharing a timestamp
+        # keep the order above rather than being flipped back.
         events = sorted(chronological, key=itemgetter("eventTimestamp"))
         messages = [message for event in events for message in _to_messages(event)]
 
-        # The window keeps the newest events, so it can start mid-turn — a turn
-        # whose prompt fell off the end, or one whose answer was never stored.
+        # The window keeps the newest events, so it can start mid-turn — and
         # Converse requires the first message to be the user's.
-        return list(dropwhile(lambda message: message["role"] != "user", messages))
+        started = dropwhile(lambda message: message["role"] != "user", messages)
+        return list(_with_missing_answers(started))
 
     def append(self, actor_id: str, session_id: str, role: str, text: str) -> None:
         """Store one spoken turn. Blank text is skipped rather than stored."""
@@ -87,6 +91,28 @@ class ConversationMemory:
             eventTimestamp=datetime.now(UTC),
             payload=[{"conversational": {"role": _TO_MEMORY_ROLE[role], "content": {"text": text}}}],
         )
+
+
+def _with_missing_answers(messages: Iterable[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+    """Close every turn whose answer was never stored.
+
+    Dropping the question instead would cost the retry the context the user
+    already gave.
+    """
+    previous = ""
+    for message in messages:
+        if previous == "user" and message["role"] == "user":
+            yield _failed_turn()
+        yield message
+        previous = message["role"]
+
+    if previous == "user":
+        yield _failed_turn()
+
+
+def _failed_turn() -> dict[str, Any]:
+    """The assistant message that stands in for an answer that never came."""
+    return {"role": "assistant", "content": [{"text": FAILED_TURN_NOTE}]}
 
 
 def _to_messages(event: dict[str, Any]) -> list[dict[str, Any]]:
