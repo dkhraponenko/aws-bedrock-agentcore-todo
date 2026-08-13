@@ -151,6 +151,17 @@ returns `exhaustive`, and `truncated` in the tool result is false only when the
 whole list was read and everything found fits, so the model can say there may
 be more instead of presenting a partial answer as the complete one.
 
+**One agent and one gateway client serve every turn.** They are built once at
+import, which is the point of owning the loop, and it makes their two pieces of
+lazily-filled state shared: the MCP handshake and the cached tool config. Both
+are read under a lock rather than behind an unguarded `is None` check — two
+turns arriving together would otherwise run two handshakes, and the second would
+replace the session id the first is already sending. Everything that belongs to
+a turn — the message list, the streamed message, the answer — is local to it,
+so the shared surface is exactly those two caches and nothing else. Whether
+AgentCore ever runs turns concurrently in one container is not something this
+code should have to assume.
+
 **The model is reached through an inference profile**, so IAM grants the
 profile ARN *and* the underlying `foundation-model/*` ARN in every region the
 profile can route to. `var.agent_model` is the only model-specific knob.
