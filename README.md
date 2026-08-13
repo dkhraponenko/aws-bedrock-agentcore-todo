@@ -107,9 +107,11 @@ zip from S3 via `code_configuration`, so the agent needs no container image
 either — no Docker, no ECR, no image lifecycle. `terraform plan` works straight
 after `git clone`.
 
-**Each artifact ships only its own package.** `src/` is a source root holding
-two of them, and the archives exclude everything outside the one they carry —
-otherwise a change to the agent loop would redeploy the tool Lambda.
+**Each artifact ships its own package, plus the one shared package.** `src/` is
+a source root, and each archive excludes every package except the one it carries
+and `todo_logging` — otherwise a change to the agent loop would redeploy the tool
+Lambda. `todo_logging` is in both because both entry points install the same JSON
+formatter at import, and a second copy of it is a thing that drifts.
 
 **Inbound auth is `AWS_IAM`.** The runtime calls the gateway as itself. End-user
 identity travels *inside* the call rather than as the credential, so `CUSTOM_JWT`
@@ -180,7 +182,12 @@ exfiltrates. What is *not* solved is the same user's own data — injected text
 can still get that user's items deleted.
 
 **Logs carry ids, never item text**, so CloudWatch holds no user content;
-retention is 14 days. The table has SSE and point-in-time recovery on. There
+retention is 14 days. They are JSON, one object per line, because the ten call
+sites that pass context do it as `logging`'s `extra=` — which the standard
+library attaches to the record and then never prints, since nothing in either
+platform's default formatter references those keys. `todo_logging` supplies the
+formatter that does, so `user_id`, `item_id` and `tool` are queryable fields in
+Logs Insights rather than attributes that were silently dropped. The table has SSE and point-in-time recovery on. There
 are no secrets anywhere in the stack — no API keys, no env-var credentials,
 SigV4 throughout.
 
@@ -267,6 +274,9 @@ src/todo_runtime/     the agent loop, deployed to AgentCore Runtime
   agent.py            Converse tool-use loop; injects the caller's user_id
   mcp.py              MCP client for the gateway, SigV4-signed
   memory.py           conversation history, partitioned by actor
+
+src/todo_logging/     shipped in both artifacts
+  json_logs.py        the formatter that makes `extra=` reach CloudWatch
 
 scripts/
   chat.py             interactive InvokeAgentRuntime client against the stack
