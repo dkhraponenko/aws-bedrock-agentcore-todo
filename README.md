@@ -300,7 +300,7 @@ docs/architecture.svg the diagram above; service glyphs are the official
 ## Running it
 
 ```bash
-python -m venv .venv && .venv/bin/pip install \
+python3.13 -m venv .venv && .venv/bin/pip install \
   pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy 'ruff==0.15.12' pre-commit
 
 pre-commit install --install-hooks && pre-commit install --hook-type pre-push
@@ -323,6 +323,13 @@ canonically formatted, no private keys, no leftover `breakpoint()`. On push:
 the test suite with a **95% branch-coverage floor** over both source packages
 (currently 99%). `scripts/` and `docs/` are excluded on purpose — no test
 imports either, so counting them would report a number about the wrong code.
+
+The interpreter is pinned the same way, and for the same reason as the ruff pin
+below: `.python-version` says 3.13, `requires-python` bars 3.14, and the version
+is spelled out in the command above rather than left to whichever `python` is on
+`PATH`. The pytest hook is `language: system` running `.venv/bin/pytest`, so this
+venv is the only interpreter that ever executes the tests — if it drifts off the
+runtime in `variables.tf`, the deployed version is tested nowhere.
 
 Hook revisions are pinned, and the ruff pin has to match the ruff you run
 locally — exactly, not as a range. 0.15.22 rewrites `# noqa: RULE` into a new

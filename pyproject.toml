@@ -2,7 +2,11 @@
 name = "todo-agent"
 version = "0.1.0"
 description = "Agent tools backing a DynamoDB-stored todo list"
-requires-python = ">=3.13"
+# Ceiling as well as floor: the Lambda and the AgentCore runtime both run 3.13
+# (infrastructure/variables.tf), there is no CI, and this venv is therefore the
+# only place the tests ever run. A newer interpreter here would test a version
+# that is never deployed and leave the deployed one tested nowhere.
+requires-python = ">=3.13,<3.14"
 # The Lambda runtime already ships boto3, and nothing else is imported at
 # runtime — so the deployment package is just the source tree.
 dependencies = []
