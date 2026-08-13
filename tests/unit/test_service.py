@@ -256,9 +256,9 @@ class TestInvocationParsing:
         invocation_factory: Callable[..., tuple[dict[str, Any], Any]],
     ) -> None:
         # Guards against a Terraform inline_payload with no matching handler.
-        declared = {"add_item", "list_items", "search_items", "update_item", "delete_item"}
-        assert declared == TOOL_NAMES
-
-        for tool in sorted(declared):
+        # What the names must be is `test_tool_contract.py`'s question, asked
+        # against tools.json; a second list written out here would be a copy
+        # that drifts.
+        for tool in sorted(TOOL_NAMES):
             result = service.process(*invocation_factory(tool))
             assert "available_tools" not in result, tool

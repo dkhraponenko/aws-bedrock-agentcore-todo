@@ -27,65 +27,58 @@ def attribute_map(item_id: str, text: str) -> dict[str, Any]:
     }
 
 
-def test_query_follows_the_pagination_cursor() -> None:
+@pytest.fixture
+def paged_client() -> MagicMock:
+    """A client whose partition takes two Query calls to read."""
     client = MagicMock(spec=DynamoDBClient)
     client.query.side_effect = [
         {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
         {"Items": [attribute_map("b", "second")]},
     ]
-    store = TodoStore(table_name="t", dynamodb_client=client)
+    return client
 
-    items = store.list_all(USER)
+
+@pytest.fixture
+def paged_store(paged_client: MagicMock) -> TodoStore:
+    return TodoStore(table_name="t", dynamodb_client=paged_client)
+
+
+def test_query_follows_the_pagination_cursor(paged_client: MagicMock, paged_store: TodoStore) -> None:
+    items = paged_store.list_all(USER)
 
     assert [item.text for item in items] == ["first", "second"]
-    assert client.query.call_count == 2
-    assert client.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"item_id": {"S": "a"}}
+    assert paged_client.query.call_count == 2
+    assert paged_client.query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"item_id": {"S": "a"}}
 
 
-def test_list_all_stops_once_the_limit_is_reached() -> None:
+def test_list_all_stops_once_the_limit_is_reached(paged_client: MagicMock, paged_store: TodoStore) -> None:
     """The cap has to bound the read, not just the returned slice."""
-    client = MagicMock(spec=DynamoDBClient)
-    client.query.side_effect = [
-        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
-        {"Items": [attribute_map("b", "second")]},
-    ]
-    store = TodoStore(table_name="t", dynamodb_client=client)
-
-    items = store.list_all(USER, limit=1)
+    items = paged_store.list_all(USER, limit=1)
 
     assert [item.text for item in items] == ["first"]
-    assert client.query.call_count == 1, "the second page must never be fetched"
+    assert paged_client.query.call_count == 1, "the second page must never be fetched"
 
 
-def test_search_reading_the_whole_list_reports_it_as_exhaustive() -> None:
-    client = MagicMock(spec=DynamoDBClient)
-    client.query.side_effect = [
-        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
-        {"Items": [attribute_map("b", "second")]},
-    ]
-    store = TodoStore(table_name="t", dynamodb_client=client)
-
-    result = store.search(USER, "second")
+def test_search_reading_the_whole_list_reports_it_as_exhaustive(paged_store: TodoStore) -> None:
+    result = paged_store.search(USER, "second")
 
     assert [item.text for item in result.items] == ["second"]
     assert result.exhaustive is True
 
 
-def test_search_stops_scanning_at_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_stops_scanning_at_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    paged_client: MagicMock,
+    paged_store: TodoStore,
+) -> None:
     """A query that matches nothing must not read an unbounded partition."""
-    client = MagicMock(spec=DynamoDBClient)
-    client.query.side_effect = [
-        {"Items": [attribute_map("a", "first")], "LastEvaluatedKey": {"item_id": {"S": "a"}}},
-        {"Items": [attribute_map("b", "second")]},
-    ]
     monkeypatch.setattr(store_module, "SEARCH_SCAN_LIMIT", 1)
-    store = TodoStore(table_name="t", dynamodb_client=client)
 
-    result = store.search(USER, "second")
+    result = paged_store.search(USER, "second")
 
     assert result.items == []
     assert result.exhaustive is False, "a capped scan has not seen the whole list"
-    assert client.query.call_count == 1, "the second page must never be fetched"
+    assert paged_client.query.call_count == 1, "the second page must never be fetched"
 
 
 def test_search_stops_once_enough_matches_are_found() -> None:
