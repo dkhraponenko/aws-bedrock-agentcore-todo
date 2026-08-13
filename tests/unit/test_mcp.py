@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from typing import TYPE_CHECKING, Any, cast
 
@@ -59,6 +62,28 @@ class FakeTransport:
     def methods(self) -> list[str]:
         """The JSON-RPC method of every request sent, in order."""
         return [sent_body(request).get("method", "") for request in self.requests]
+
+
+class ConcurrentTransport:
+    """Answers any number of requests, pausing in the handshake to widen the race."""
+
+    def __init__(self, pause: float = 0.05) -> None:
+        self._pause = pause
+        self._lock = threading.Lock()
+        self.methods: list[str] = []
+        self.request_ids: list[Any] = []
+
+    def __call__(self, request: urllib.request.Request, **_: object) -> FakeResponse:
+        payload = sent_body(request)
+        method = payload.get("method", "")
+        with self._lock:
+            self.methods.append(method)
+            self.request_ids.append(payload.get("id"))
+
+        if method == "initialize":
+            time.sleep(self._pause)
+            return FakeResponse(rpc({}, payload.get("id", 1)), session_id="session-1")
+        return FakeResponse(rpc({"tools": []}, payload.get("id", 1)))
 
 
 def sent_body(request: urllib.request.Request) -> dict[str, Any]:
@@ -204,3 +229,41 @@ def test_http_error_becomes_a_gateway_error(client: GatewayClient, monkeypatch: 
 )
 def test_decode_tool_result(result: dict[str, Any], expected: dict[str, Any]) -> None:
     assert decode_tool_result(result) == expected
+
+
+def test_the_handshake_runs_once_under_concurrent_calls(client: GatewayClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One client shared by concurrent turns must not initialise the session twice."""
+    sent = ConcurrentTransport()
+    monkeypatch.setattr(urllib.request, "urlopen", sent)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: client.list_tools(), range(8)))
+
+    assert sent.methods.count("initialize") == 1
+
+
+def test_request_ids_stay_unique_under_concurrent_calls(client: GatewayClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`id` identifies a request; a shared counter read-modify-written can repeat one."""
+    sent = ConcurrentTransport(pause=0.0)
+    monkeypatch.setattr(urllib.request, "urlopen", sent)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: client.list_tools(), range(60)))
+
+    issued = [request_id for request_id in sent.request_ids if request_id is not None]
+    assert len(issued) == len(set(issued))
+
+
+def test_the_session_id_comes_only_from_the_handshake(client: GatewayClient, transport: Transport) -> None:
+    """A later response must not be able to move the session out from under a turn."""
+    sent = transport(
+        FakeResponse(rpc({}), session_id="session-from-handshake"),
+        FakeResponse("", content_type="text/plain"),
+        FakeResponse(rpc({"tools": []}), session_id="session-from-a-later-response"),
+        FakeResponse(rpc({"tools": []})),
+    )
+
+    client.list_tools()
+    client.list_tools()
+
+    assert sent.requests[-1].headers["Mcp-session-id"] == "session-from-handshake"

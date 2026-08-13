@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 
@@ -272,6 +275,32 @@ def test_a_failed_turn_keeps_history_in_alternating_pairs(memory_client: DictMem
     history = ConversationMemory(memory_client, memory_id="memory-test").load("alice", "session-1")
 
     assert [message["role"] for message in history] == ["user", "assistant", "user", "assistant"]
+
+
+class SlowGateway(FakeGateway):
+    """Pauses inside list_tools so concurrent turns overlap in the cache."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lock = threading.Lock()
+        self.list_started = 0
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        with self._lock:
+            self.list_started += 1
+        time.sleep(0.05)
+        return super().list_tools()
+
+
+def test_the_tool_config_is_fetched_once_under_concurrent_turns(memory_client: DictMemoryClient) -> None:
+    """The agent is shared across turns; its lazy cache must not be filled twice."""
+    gateway = SlowGateway()
+    agent = build_agent(FakeBedrock(text_stream("Hi.")), gateway, memory_client)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(lambda n: list(agent.run("alice", f"s-{n}", "hi")), range(6)))
+
+    assert gateway.list_started == 1
 
 
 def test_history_is_not_shared_between_users(memory_client: DictMemoryClient) -> None:

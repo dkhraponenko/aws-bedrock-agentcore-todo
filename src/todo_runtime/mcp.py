@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from itertools import count
 from typing import TYPE_CHECKING, Any
 
 from botocore.auth import SigV4Auth
@@ -101,7 +103,10 @@ class GatewayClient:
         self._timeout = timeout
         self._session_id: str | None = None
         self._connected = False
-        self._request_id = 0
+        # `+=` can hand two threads the same id; `next()` on a count cannot.
+        self._request_ids = count(1)
+        # One client serves every turn; the handshake is their shared state.
+        self._lock = threading.Lock()
 
     def _send(self, payload: dict[str, Any]) -> tuple[str, str, str | None]:
         """Sign one JSON-RPC payload, post it, and return the raw response."""
@@ -131,16 +136,17 @@ class GatewayClient:
 
     def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Issue one JSON-RPC request and return its result object."""
-        self._request_id += 1
         content_type, body, session_id = self._send(
             {
                 "jsonrpc": "2.0",
-                "id": self._request_id,
+                "id": next(self._request_ids),
                 "method": method,
                 "params": params or {},
             }
         )
-        if session_id:
+        # Only the handshake assigns a session: taking the id from a later
+        # response would move the session another turn is working in.
+        if session_id and not self._connected:
             self._session_id = session_id
 
         message = _parse_message(content_type, body)
@@ -154,34 +160,32 @@ class GatewayClient:
         self._send({"jsonrpc": "2.0", "method": method})
 
     def connect(self) -> None:
-        """Run the MCP handshake. Safe to call more than once.
+        """Run the MCP handshake. Safe to call more than once, from any thread.
 
-        Tracked with its own flag rather than by the presence of a session id:
-        the session header is optional in the protocol, and keying off it would
-        repeat the handshake on every call against a gateway that omits it.
+        Tracked with its own flag, not by the session id: that header is
+        optional, and a gateway omitting it would repeat the handshake forever.
         """
-        if self._connected:
-            return
+        # Read under the lock, not before it: two turns would otherwise both
+        # find it false, and the second handshake would replace the session id
+        # the first is already sending.
+        with self._lock:
+            if self._connected:
+                return
 
-        self._call(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": CLIENT_INFO,
-            },
-        )
-        self._notify("notifications/initialized")
-        self._connected = True
-        logger.info("MCP session established", extra={"session_id": self._session_id})
+            self._call(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": CLIENT_INFO,
+                },
+            )
+            self._notify("notifications/initialized")
+            self._connected = True
+            logger.info("MCP session established", extra={"session_id": self._session_id})
 
     def list_tools(self) -> list[dict[str, Any]]:
-        """Return the tool schemas the gateway publishes.
-
-        Fetched rather than read from `tools.json`, so the model is offered
-        exactly what the gateway will accept and the runtime artifact does not
-        have to ship a copy of the contract.
-        """
+        """Return the tool schemas the gateway publishes, not `tools.json`'s."""
         self.connect()
         return list(self._call("tools/list").get("tools", []))
 

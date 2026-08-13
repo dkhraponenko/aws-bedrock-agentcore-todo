@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -141,27 +142,32 @@ class TodoAgent:
         self._config = config
         self._system = [{"text": config.system_prompt}]
         self._tool_config: dict[str, Any] | None = None
+        # One agent serves every turn, so its lazy cache is shared state.
+        self._tool_config_lock = threading.Lock()
 
     def tool_config(self) -> dict[str, Any]:
         """Return the Converse tool config, fetched from the gateway once.
 
-        The gateway is the authority on what it will accept, so the contract is
-        read from it rather than from a copy of `tools.json` in this artifact.
+        The gateway is the authority on what it accepts, so the contract is read
+        from it rather than from a copy of `tools.json`.
         """
-        if self._tool_config is None:
-            self._tool_config = {
-                "tools": [
-                    {
-                        "toolSpec": {
-                            "name": tool["name"],
-                            "description": tool.get("description", ""),
-                            "inputSchema": {"json": tool["inputSchema"]},
-                        },
-                    }
-                    for tool in self._gateway.list_tools()
-                ],
-            }
-        return self._tool_config
+        # Checked under the lock, not before it: two turns would otherwise both
+        # find the cache unset and fetch the contract twice.
+        with self._tool_config_lock:
+            if self._tool_config is None:
+                self._tool_config = {
+                    "tools": [
+                        {
+                            "toolSpec": {
+                                "name": tool["name"],
+                                "description": tool.get("description", ""),
+                                "inputSchema": {"json": tool["inputSchema"]},
+                            },
+                        }
+                        for tool in self._gateway.list_tools()
+                    ],
+                }
+            return self._tool_config
 
     def run(self, user_id: str, session_id: str, prompt: str) -> Iterator[dict[str, Any]]:
         """Answer one user message, yielding events as they happen.
