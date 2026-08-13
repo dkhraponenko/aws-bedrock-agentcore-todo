@@ -79,6 +79,10 @@ repos:
         name: pytest with coverage gate
         entry: .venv/bin/pytest
         language: system
-        types: [python]
+        # The suite does not depend on which files changed, so it must not be
+        # skipped when none of them are .py: pyproject.toml carries the coverage
+        # gate, the import paths and the test environment, and a push that
+        # touches only that would otherwise never run the tests it configures.
+        always_run: true
         pass_filenames: false
         stages: [pre-push]
