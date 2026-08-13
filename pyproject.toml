@@ -119,7 +119,7 @@ AGENT_INSTRUCTION = "You are a todo assistant."
 [tool.coverage.run]
 # Only the deployment packages. scripts/ is developer tooling that no test
 # imports; counting it would report a number about the wrong code.
-source = ["src/todo_agent", "src/todo_runtime"]
+source = ["src/todo_agent", "src/todo_runtime", "src/todo_logging"]
 branch = true
 
 [tool.coverage.report]

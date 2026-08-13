@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import boto3
 from botocore.config import Config
 
+from todo_logging.json_logs import configure
 from todo_runtime.agent import MAX_ITERATIONS, AgentConfig, TodoAgent
 from todo_runtime.mcp import GatewayClient
 from todo_runtime.memory import ConversationMemory
@@ -28,7 +29,9 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+# Installs the JSON formatter as well as setting the level: without it the
+# `extra=` context below is attached to each record and then never printed.
+configure(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 # A session names a conversation, so defaulting one is harmless. There is no

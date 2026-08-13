@@ -7,9 +7,12 @@ import os
 from typing import Any
 
 from todo_agent.service import TodoService
+from todo_logging.json_logs import configure
 
 
-logging.getLogger().setLevel(os.environ.get("LOG_LEVEL", "INFO"))
+# Installs the JSON formatter as well as setting the level: without it the
+# `extra=` context below is attached to each record and then never printed.
+configure(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 # Cold start: build the DynamoDB client once and reuse it across invocations.

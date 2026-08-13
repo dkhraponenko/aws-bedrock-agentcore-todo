@@ -10,6 +10,11 @@ locals {
   source_root  = "${path.module}/../src"
   source_files = fileset(local.source_root, "**")
 
+  # The one package both artifacts carry: the JSON log formatter each entry
+  # point installs at import. Duplicating it per deployable is the alternative,
+  # and a second copy is a thing that drifts.
+  shared_package = "todo_logging/"
+
   # archive_file takes literal paths, not globs, so the exclusion lists are
   # computed. Bytecode a local test run left behind has to stay out, or the zip
   # hash — and therefore the deployment — changes without the source changing.
@@ -20,12 +25,18 @@ locals {
 
   lambda_excludes = toset(concat(
     local.bytecode,
-    [for file in local.source_files : file if !startswith(file, "todo_agent/")],
+    [
+      for file in local.source_files : file
+      if !startswith(file, "todo_agent/") && !startswith(file, local.shared_package)
+    ],
   ))
 
   runtime_excludes = toset(concat(
     local.bytecode,
-    [for file in local.source_files : file if !startswith(file, "todo_runtime/")],
+    [
+      for file in local.source_files : file
+      if !startswith(file, "todo_runtime/") && !startswith(file, local.shared_package)
+    ],
   ))
 }
 
