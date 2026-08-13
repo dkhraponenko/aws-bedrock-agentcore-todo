@@ -121,7 +121,17 @@ the one that matters.
 **Only spoken turns are persisted.** Converse requires every `toolUse` block to
 be answered by a matching `toolResult` in the same sequence, so replaying
 half-finished tool exchanges out of storage risks a malformed request for no
-benefit. It also halves the memory events a conversation bills for. Loading
+benefit. It also halves the memory events a conversation bills for.
+
+What counts as the turn is the *last* pass of the loop. A tool call takes at
+least two passes — "let me look", then the answer — and storing the
+concatenation would replay the model's own scaffolding back to it as something
+it had said. A turn that dies mid-flight is recorded too, as the question plus
+an explicit note that it went unanswered: dropping it would leave the retry
+without the context the user already gave, and recording the question alone
+would put two user messages in a row, which Converse rejects.
+
+Loading
 them back is ordering-sensitive in two ways Converse will reject: `ListEvents`
 answers newest first, so history is *reversed* rather than sorted — a prompt and
 its answer are written back to back and can share a timestamp, and sorting would
