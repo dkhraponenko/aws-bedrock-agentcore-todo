@@ -131,27 +131,28 @@ def test_answers_without_tools_and_records_both_turns(memory_client: DictMemoryC
     ]
 
 
-def test_tool_call_carries_the_verified_user_id(memory_client: DictMemoryClient) -> None:
-    """The whole point of owning the loop: identity the model never chose."""
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param({"text": "buy a milk"}, id="model-supplied-none"),
+        pytest.param({"text": "buy a milk", USER_ID_ARGUMENT: "victim"}, id="model-supplied-another-user"),
+    ],
+)
+def test_tool_call_carries_the_verified_user_id(
+    memory_client: DictMemoryClient,
+    arguments: dict[str, Any],
+) -> None:
+    """The whole point of owning the loop: identity the model never chose.
+
+    A model talked into naming another user must not reach the tool with it, so
+    the injected value is merged last rather than defaulted in.
+    """
     gateway = FakeGateway()
-    bedrock = FakeBedrock(tool_stream(json.dumps({"text": "buy a milk"})), text_stream("Added."))
+    bedrock = FakeBedrock(tool_stream(json.dumps(arguments)), text_stream("Added."))
 
     list(build_agent(bedrock, gateway, memory_client).run("alice", "session-1", "add buy a milk"))
 
     assert gateway.calls == [(TOOL_NAME, {"text": "buy a milk", USER_ID_ARGUMENT: "alice"})]
-
-
-def test_a_user_id_from_the_model_is_overwritten(memory_client: DictMemoryClient) -> None:
-    """A model talked into naming another user must not reach the tool with it."""
-    gateway = FakeGateway()
-    bedrock = FakeBedrock(
-        tool_stream(json.dumps({"text": "x", USER_ID_ARGUMENT: "victim"})),
-        text_stream("Added."),
-    )
-
-    list(build_agent(bedrock, gateway, memory_client).run("alice", "session-1", "add x"))
-
-    assert gateway.calls[0][1][USER_ID_ARGUMENT] == "alice"
 
 
 def test_tool_result_is_fed_back_to_the_model(memory_client: DictMemoryClient) -> None:

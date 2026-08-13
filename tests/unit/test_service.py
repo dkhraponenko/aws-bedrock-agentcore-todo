@@ -105,24 +105,27 @@ class TestSearchAndList:
         assert result["truncated"] is False
         assert result["items"][0]["item_id"] == "id-1"
 
-    def test_search_items_truncates_long_result_sets(self, service: type[TodoService], mock_store: MagicMock) -> None:
-        matches = [make_item(item_id=f"id-{i}") for i in range(SEARCH_RESULT_LIMIT + 1)]
-        mock_store.search.return_value = SearchResult(items=matches, exhaustive=False)
-
-        result = service.process(*create_invocation("search_items", {"query": "a"}))
-
-        assert result["truncated"] is True
-        assert result["count"] == len(result["items"]) == SEARCH_RESULT_LIMIT
-
-    def test_search_items_reports_a_capped_scan_as_truncated(
-        self, service: type[TodoService], mock_store: MagicMock
+    @pytest.mark.parametrize(
+        ("matches", "expected_count"),
+        [
+            pytest.param(SEARCH_RESULT_LIMIT + 1, SEARCH_RESULT_LIMIT, id="more-matches-than-the-limit"),
+            pytest.param(1, 1, id="scan-stopped-early"),
+        ],
+    )
+    def test_search_items_flags_an_incomplete_answer(
+        self,
+        service: type[TodoService],
+        mock_store: MagicMock,
+        matches: int,
+        expected_count: int,
     ) -> None:
-        """Few matches from a scan that stopped early is not a complete answer."""
-        mock_store.search.return_value = SearchResult(items=[make_item(item_id="id-1")], exhaustive=False)
+        """Hitting the result cap and stopping the scan early say the same thing."""
+        items = [make_item(item_id=f"id-{i}") for i in range(matches)]
+        mock_store.search.return_value = SearchResult(items=items, exhaustive=False)
 
         result = service.process(*create_invocation("search_items", {"query": "milk"}))
 
-        assert result["count"] == 1
+        assert result["count"] == len(result["items"]) == expected_count
         assert result["truncated"] is True
 
     def test_list_items_passes_status_filter_through(self, service: type[TodoService], mock_store: MagicMock) -> None:
@@ -132,22 +135,28 @@ class TestSearchAndList:
 
         mock_store.list_all.assert_called_once_with("demo-user", status=TodoStatus.DONE, limit=LIST_RESULT_LIMIT + 1)
 
-    def test_list_items_truncates_a_long_list(self, service: type[TodoService], mock_store: MagicMock) -> None:
+    @pytest.mark.parametrize(
+        ("stored", "expected_count", "expected_truncated"),
+        [
+            pytest.param(LIST_RESULT_LIMIT + 1, LIST_RESULT_LIMIT, True, id="over-the-limit"),
+            pytest.param(1, 1, False, id="within-the-limit"),
+        ],
+    )
+    def test_list_items_truncates_only_past_the_limit(
+        self,
+        service: type[TodoService],
+        mock_store: MagicMock,
+        stored: int,
+        expected_count: int,
+        expected_truncated: bool,
+    ) -> None:
         """An unbounded list would be read into the Lambda and resent to the model whole."""
-        mock_store.list_all.return_value = [make_item(item_id=f"id-{i}") for i in range(LIST_RESULT_LIMIT + 1)]
+        mock_store.list_all.return_value = [make_item(item_id=f"id-{i}") for i in range(stored)]
 
         result = service.process(*create_invocation("list_items"))
 
-        assert result["truncated"] is True
-        assert result["count"] == len(result["items"]) == LIST_RESULT_LIMIT
-
-    def test_a_list_within_the_limit_is_not_flagged(self, service: type[TodoService], mock_store: MagicMock) -> None:
-        mock_store.list_all.return_value = [make_item(item_id="id-1")]
-
-        result = service.process(*create_invocation("list_items"))
-
-        assert result["truncated"] is False
-        assert result["count"] == 1
+        assert result["count"] == len(result["items"]) == expected_count
+        assert result["truncated"] is expected_truncated
 
     def test_list_items_rejects_unknown_status(self, service: type[TodoService], mock_store: MagicMock) -> None:
         result = service.process(*create_invocation("list_items", {"status": "later"}))
@@ -205,20 +214,14 @@ def test_search_items_runs_end_to_end_against_a_real_store(wired_store: None) ->
 
 
 class TestInvocationParsing:
-    def test_target_prefix_is_stripped_from_the_tool_name(
-        self, service: type[TodoService], mock_store: MagicMock
+    @pytest.mark.parametrize("target", ["some-other-target", ""], ids=["prefixed", "bare"])
+    def test_the_tool_name_dispatches_with_or_without_a_target(
+        self, service: type[TodoService], mock_store: MagicMock, target: str
     ) -> None:
         # The gateway sends "<target>___<tool>"; handlers key off the bare name.
         mock_store.list_all.return_value = []
 
-        result = service.process(*create_invocation("list_items", target="some-other-target"))
-
-        assert result == {"count": 0, "truncated": False, "items": []}
-
-    def test_unprefixed_tool_name_still_dispatches(self, service: type[TodoService], mock_store: MagicMock) -> None:
-        mock_store.list_all.return_value = []
-
-        result = service.process(*create_invocation("list_items", target=""))
+        result = service.process(*create_invocation("list_items", target=target))
 
         assert result == {"count": 0, "truncated": False, "items": []}
 

@@ -42,12 +42,15 @@ def emit() -> Callable[..., dict[str, Any]]:
     return _emit
 
 
-def test_extra_fields_reach_the_output(emit: Callable[..., dict[str, Any]]) -> None:
-    """The whole point: ten call sites pass ids this way."""
+def test_extra_fields_reach_the_output_and_record_internals_do_not(
+    emit: Callable[..., dict[str, Any]],
+) -> None:
+    """The whole point: ten call sites pass ids this way, and nothing else rides along."""
     entry = emit(item_id="a1", user_id="alice")
 
     assert entry["item_id"] == "a1"
     assert entry["user_id"] == "alice"
+    assert not {"msg", "args", "levelno", "pathname", "created"} & set(entry)
 
 
 def test_level_logger_and_message_are_always_present(emit: Callable[..., dict[str, Any]]) -> None:
@@ -57,13 +60,6 @@ def test_level_logger_and_message_are_always_present(emit: Callable[..., dict[st
     assert entry["logger"] == "todo_agent.store"
     assert entry["message"] == "Created item"
     assert entry["timestamp"].endswith("+00:00")
-
-
-def test_internal_record_attributes_are_not_emitted(emit: Callable[..., dict[str, Any]]) -> None:
-    """Only the message, its context and the extras — not logging's own bookkeeping."""
-    entry = emit(user_id="alice")
-
-    assert not {"msg", "args", "levelno", "pathname", "created"} & set(entry)
 
 
 def _raise_boom() -> None:
@@ -90,20 +86,11 @@ def test_a_value_that_is_not_json_serialisable_falls_back_to_repr(
     assert "boom" in entry["error"]
 
 
-def test_configure_reuses_a_handler_the_platform_installed() -> None:
+@pytest.mark.parametrize("installed", [1, 0], ids=["platform-installed-one", "platform-installed-none"])
+def test_configure_leaves_exactly_one_json_handler(installed: int) -> None:
     """Lambda installs its own handler; adding a second one would log everything twice."""
     root = logging.getLogger()
-    root.handlers = [logging.StreamHandler(io.StringIO())]
-
-    configure("INFO")
-
-    assert len(root.handlers) == 1
-    assert isinstance(root.handlers[0].formatter, JsonFormatter)
-
-
-def test_configure_adds_a_handler_when_the_platform_installed_none() -> None:
-    root = logging.getLogger()
-    root.handlers = []
+    root.handlers = [logging.StreamHandler(io.StringIO()) for _ in range(installed)]
 
     configure("WARNING")
 

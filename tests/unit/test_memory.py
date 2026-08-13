@@ -29,22 +29,19 @@ def memory(client: MagicMock) -> ConversationMemory:
     return ConversationMemory(client, memory_id="memory-test")
 
 
-def test_history_is_returned_oldest_first(client: MagicMock, memory: ConversationMemory) -> None:
-    """ListEvents answers newest first; Converse needs the opposite."""
+@pytest.mark.parametrize("answered_at", [2, 1], ids=["later-minute", "same-instant"])
+def test_history_is_returned_oldest_first(
+    client: MagicMock,
+    memory: ConversationMemory,
+    answered_at: int,
+) -> None:
+    """ListEvents answers newest first; Converse needs the opposite.
+
+    Two events can share a timestamp, so the order has to survive a sort that
+    is free to treat them as equal.
+    """
     client.list_events.return_value = {
-        "events": [event("ASSISTANT", "second", 2), event("USER", "first", 1)],
-    }
-
-    assert memory.load("alice", "session-1") == [
-        {"role": "user", "content": [{"text": "first"}]},
-        {"role": "assistant", "content": [{"text": "second"}]},
-    ]
-
-
-def test_a_turn_stored_in_the_same_instant_keeps_its_order(client: MagicMock, memory: ConversationMemory) -> None:
-    """A prompt and its answer are written back to back and can share a timestamp."""
-    client.list_events.return_value = {
-        "events": [event("ASSISTANT", "answer", 1), event("USER", "question", 1)],
+        "events": [event("ASSISTANT", "answer", answered_at), event("USER", "question", 1)],
     }
 
     assert memory.load("alice", "session-1") == [
