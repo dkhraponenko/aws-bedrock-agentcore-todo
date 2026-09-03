@@ -4,7 +4,7 @@
 The icons are not redistributed here: point ICON_PACK at an extracted copy of the
 AWS Architecture Icons download and rerun this after changing the stack.
 
-    ICON_PACK=~/Downloads/Icon-package_… python docs/build_diagram.py
+    ICON_PACK=path/to/extracted/pack python docs/build_diagram.py
 """
 
 from __future__ import annotations
@@ -15,7 +15,10 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_PACK = "~/Downloads/Icon-package_07312026.5846e92413caa21490223536cc97f1269e44fa92"
+# A placeholder rather than anyone's real download path: the pack extracts to a
+# hash-suffixed directory name, so ICON_PACK is expected to be set explicitly and
+# main() below says so when it is not.
+DEFAULT_PACK = "~/Downloads/aws-architecture-icons"
 ICON_PACK = Path(os.environ.get("ICON_PACK", DEFAULT_PACK)).expanduser()
 SERVICE = ICON_PACK / "Architecture-Service-Icons_07312026"
 OUT = Path(__file__).resolve().parent / "architecture.svg"
