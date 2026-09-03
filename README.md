@@ -252,3 +252,11 @@ different values across two runs to watch the isolation from outside.
   history and no recall across conversations.
 - **Not load-tested.** One vCPU and the default concurrency were never measured;
   the cost model assumes a session shape rather than an observed one.
+
+## License
+
+MIT, in `LICENSE`.
+
+The code, not the pictures: the service glyphs in `docs/architecture.svg` are the
+official AWS Architecture Icons, inlined unmodified and still AWS's. The pack is
+not redistributed here — `docs/build_diagram.py` reads it from `ICON_PACK`.
