@@ -21,3 +21,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Agent tooling
+.claude/settings.local.json
