@@ -89,7 +89,7 @@ about 200 lines and no new dependency.
 
 **No build step.** Nothing is imported beyond the standard library and boto3,
 which both runtimes provide, and AgentCore Runtime takes a zip from S3 rather
-than a container image. `terraform plan` works straight after `git clone`. Each
+than a container image, so there is nothing to build before a deploy. Each
 artifact carries its own package plus `todo_logging`, so a change to the loop
 does not redeploy the Lambda.
 
@@ -191,8 +191,7 @@ about **$0.001/month**.
 ## Running it
 
 ```bash
-python3.13 -m venv .venv && .venv/bin/pip install \
-  pytest pytest-env pytest-cov 'moto[dynamodb]' boto3 mypy 'ruff==0.15.12' pre-commit
+python3.13 -m venv .venv && .venv/bin/pip install --group dev
 
 pre-commit install --install-hooks && pre-commit install --hook-type pre-push
 pre-commit run --all-files    # everything the hooks enforce, in one go
@@ -200,8 +199,7 @@ pre-commit run --all-files    # everything the hooks enforce, in one go
 .venv/bin/pytest              # tests + the coverage gate
 
 cd infrastructure
-terraform init
-terraform validate            # no credentials needed; plan and apply need them
+terraform init                # state is in S3, so credentials from here on
 terraform apply
 eval "$(terraform output -raw chat_command)"
 ```
@@ -217,14 +215,31 @@ interpreter that ever executes the tests. Ruff is pinned exactly, not as a
 range: 0.15.22 rewrites `# noqa: RULE` into a syntax that 0.15.12 rejects, so a
 wider bound leaves the repo failing its own hooks.
 
+The same hooks run in GitHub Actions on every push to main, with tflint and
+trivy added: those two are separate binaries, so requiring them locally would
+make a fresh clone fail to commit. The provider lock files carry hashes for
+Linux as well as macOS, because a lock written on one platform is rewritten by
+`terraform init` on the other, and the commit hook reports that as an
+uncommitted change. Deploying is a second workflow, run from a
+button — `plan`, `apply` or `destroy` — and `destroy` refuses to start unless
+the project name is typed into it. The runner reaches AWS through OIDC, so
+there is no access key stored in GitHub either.
+
+State lives in S3. `infrastructure/bootstrap/` creates that bucket, the identity
+provider and the role Actions assumes; it is applied once by hand, because
+nothing a deploy depends on can be created by that deploy. It is also what keeps
+a destroy from cutting CI off: the deploy role is explicitly denied every action
+against its own role, the provider and the state bucket.
+
 ### Checking it without deploying
 
 Everything below the model runs offline, without credentials.
 `test_tool_contract.py` drives the real `lambda_handler` on moto through the
 `(event, client_context)` pair the gateway would deliver. `test_agent.py` runs
 the shipped loop against a scripted Converse stream. `test_mcp.py` replaces
-`urlopen` and checks the framing, handshake and SigV4 headers. `terraform
-validate` covers the HCL.
+`urlopen` and checks the framing, handshake and SigV4 headers.
+`terraform init -backend=false && terraform validate` covers the HCL without
+reaching for the state bucket, which is what the commit hook does.
 
 That leaves whether the model makes the right decisions:
 
@@ -244,10 +259,6 @@ different values across two runs to watch the isolation from outside.
   `scripts/chat.py`, which sends whatever `USER_ID` says while authenticating to
   AWS as the operator. The isolation is real; what is missing is something that
   establishes who the user is, such as a web client behind Cognito.
-- **No CI.** The pre-commit hooks are the whole enforcement story, so a
-  `--no-verify` commit goes unchallenged. The hook set would work unchanged as a
-  GitHub Actions job.
-- **No remote state.** Fine for one operator, wrong for a team.
 - **Short-term memory only.** No extraction strategies, so there is session
   history and no recall across conversations.
 - **Not load-tested.** One vCPU and the default concurrency were never measured;
