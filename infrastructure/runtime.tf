@@ -24,6 +24,11 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
+# SSE-S3 rather than SSE-KMS, deliberately. A customer-managed key is $1/month
+# standing charge plus a request charge, against a stack whose whole idle cost is
+# about $0.001/month, and it buys key rotation and a key policy that nothing here
+# has a use for.
+#trivy:ignore:AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
   bucket = aws_s3_bucket.artifacts.id
 

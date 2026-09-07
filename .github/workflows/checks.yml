@@ -1,0 +1,86 @@
+# Everything the pre-commit hooks enforce, run again where --no-verify cannot
+# reach. The hooks are the definition; this workflow only supplies a machine to
+# run them on, so the two cannot disagree.
+name: checks
+
+on:
+  # Straight to main is how this repository is worked on, and that is exactly
+  # where a `git commit --no-verify` would otherwise go unchallenged.
+  push:
+    branches: [main]
+  pull_request:
+  # Lets deploy.yml require these same checks before it touches AWS.
+  workflow_call:
+
+# No secrets and no AWS credentials anywhere below, which is what makes this
+# safe to run on a pull request from a fork once the repository is public.
+permissions:
+  contents: read
+
+# github.workflow is the caller's name, so a deploy run's checks and a push's
+# checks land in different groups instead of cancelling one another.
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # .python-version already pins the interpreter the pytest hook runs under.
+      # Reading it keeps CI from becoming a second place that has to be bumped.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      # terraform_fmt and terraform_validate are pre-commit hooks, so the binary
+      # has to be on PATH. The wrapper this action installs by default rewrites
+      # terraform's output and the hooks misread it.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # The pytest hook runs `.venv/bin/pytest` literally, so the venv has to sit
+      # at that path — the same one the README tells a human to create.
+      - name: Install the dev dependency group
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install --group dev
+
+      - name: Hooks that run on commit
+        run: .venv/bin/pre-commit run --all-files --show-diff-on-failure
+
+      # pytest sits on the pre-push stage, so it needs asking for by name. This
+      # repeats the hooks above, which have no stage of their own and therefore
+      # run at every stage — deliberately, so that a hook later pinned to
+      # pre-commit only is still run by the step above rather than silently
+      # dropped by this one.
+      - name: Tests and the coverage gate
+        run: .venv/bin/pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
+
+      - name: Coverage summary
+        run: .venv/bin/coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+
+      # tflint and trivy are kept out of .pre-commit-config.yaml deliberately:
+      # both are separate binaries, and needing them would make a fresh clone
+      # fail to commit. That constraint does not exist on a runner.
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+      - name: tflint
+        run: tflint --recursive --chdir=infrastructure
+
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infrastructure
+          severity: HIGH,CRITICAL
+          exit-code: "1"

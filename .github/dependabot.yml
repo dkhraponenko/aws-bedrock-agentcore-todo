@@ -1,0 +1,16 @@
+# Actions are pinned to commit SHAs rather than tags, for the reason the header
+# of .pre-commit-config.yaml gives about hook revisions: something that updates
+# itself changes what the repository enforces without anyone reviewing it.
+# A pin needs a way to move, and this is it.
+#
+# There is no equivalent for the pre-commit hooks themselves - Dependabot has no
+# pre-commit ecosystem - so those still move by hand, via `pre-commit autoupdate`.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

@@ -61,6 +61,8 @@ repos:
   # --- infrastructure ----------------------------------------------------------------
   # tflint and trivy are deliberately left out: both are separate binaries this
   # hook does not install, so including them makes a fresh clone fail to commit.
+  # They run in .github/workflows/checks.yml instead, where a runner installs
+  # them anyway.
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: v1.108.1
     hooks:

@@ -1,0 +1,93 @@
+# The only thing that talks to AWS. Never triggered by a push or a pull request:
+# deploying is a decision, so it is a button.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to run against AWS
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+      confirm:
+        description: For destroy only - type todo-agent
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Never cancel a run already in flight. An interrupted apply leaves state
+# describing something that is only half built, which is worse than waiting.
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  terraform:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only this job mints an OIDC token, so only this job is granted one. The
+    # token is what configure-aws-credentials exchanges for an hour of access;
+    # no long-lived key is stored in GitHub at all.
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infrastructure
+
+    steps:
+      # First step on purpose: before the checkout, and before any credential
+      # exists. Two clicks separate apply from destroy in that dropdown, so the
+      # second one has to be typed out.
+      - name: Confirm a destroy
+        if: inputs.action == 'destroy' && inputs.confirm != 'todo-agent'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "destroy requires confirm to be exactly: todo-agent" >&2
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        with:
+          # A secret rather than a variable: it carries the account id, and
+          # terraform prints ARNs into logs that go public with the repository.
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Matches var.aws_region and the backend block, both of which default
+          # to us-east-1.
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform init -input=false
+
+      # Always a saved plan, even for apply. What the log shows is then the plan
+      # that ran, not a description of what a second plan would have decided.
+      # destroy takes the same path, so it is shown before it happens.
+      - name: Plan
+        run: terraform plan -input=false -out=tfplan ${{ inputs.action == 'destroy' && '-destroy' || '' }}
+
+      - name: Plan summary
+        run: |
+          {
+            echo '```terraform'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply
+        if: inputs.action != 'plan'
+        run: terraform apply -input=false tfplan

@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.6"
+  # 1.10 is the floor for use_lockfile in backend.tf.
+  required_version = ">= 1.10"
 
   required_providers {
     # 6.x is the floor for the aws_bedrockagentcore_* resources.
