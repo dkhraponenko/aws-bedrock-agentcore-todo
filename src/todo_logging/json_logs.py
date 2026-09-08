@@ -13,12 +13,17 @@ from datetime import UTC, datetime
 from typing import Any
 
 
-# Everything `logging` puts on a record itself. Deriving the set from a real
-# record keeps it correct across versions, where a hand-written list would
-# quietly start leaking a newly added attribute into every log line.
+# Everything `logging` puts on a record itself. Derived from a real record, so a
+# newly added attribute never starts leaking into every line.
 _RECORD_ATTRIBUTES = frozenset(
     logging.LogRecord(name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None).__dict__
 ) | {"message", "asctime", "taskName"}
+
+
+# Chatty at INFO about nothing this application did, and CloudWatch bills by the
+# gigabyte whoever wrote the line. Silenced by name rather than by raising the
+# root level, which would take this application's own INFO lines with it.
+_NOISY_LIBRARIES = ("boto3", "botocore", "urllib3")
 
 
 class JsonFormatter(logging.Formatter):
@@ -49,7 +54,7 @@ def configure(level: str) -> None:
     """Set the root level and put the JSON formatter on the handler in use.
 
     Reuses whatever handler the platform installed instead of adding one:
-    Lambda attaches its own, and a second handler would emit every line twice.
+    Lambda attaches its own, and a second handler emits every line twice.
 
     Args:
         level: Root log level name, e.g. the value of `LOG_LEVEL`.
@@ -61,3 +66,6 @@ def configure(level: str) -> None:
         root.addHandler(logging.StreamHandler())
     for handler in root.handlers:
         handler.setFormatter(JsonFormatter())
+
+    for name in _NOISY_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.WARNING)

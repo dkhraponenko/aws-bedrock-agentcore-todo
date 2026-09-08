@@ -16,13 +16,21 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 
+# Named here rather than imported from the module under test: what matters is
+# that these three are quiet, not that the module still spells them the same.
+SDK_LOGGERS = ("boto3", "botocore", "urllib3")
+
+
 @pytest.fixture(autouse=True)
 def restore_root() -> Generator[None]:
-    """configure() mutates the root logger; keep that out of other tests."""
+    """configure() mutates the root logger and the SDK's; keep that local."""
     root = logging.getLogger()
     handlers, level = root.handlers[:], root.level
+    quieted = {name: logging.getLogger(name).level for name in SDK_LOGGERS}
     yield
     root.handlers, root.level = handlers, level
+    for name, previous in quieted.items():
+        logging.getLogger(name).setLevel(previous)
 
 
 @pytest.fixture
@@ -97,3 +105,13 @@ def test_configure_leaves_exactly_one_json_handler(installed: int) -> None:
     assert len(root.handlers) == 1
     assert isinstance(root.handlers[0].formatter, JsonFormatter)
     assert root.level == logging.WARNING
+
+
+@pytest.mark.parametrize("name", SDK_LOGGERS)
+def test_the_sdk_is_quieted_without_muting_the_application(name: str) -> None:
+    """botocore says where it found credentials on every cold start, and it is billed."""
+    configure("INFO")
+
+    assert logging.getLogger(name).level == logging.WARNING
+    assert logging.getLogger().level == logging.INFO
+    assert logging.getLogger("todo_agent.store").getEffectiveLevel() == logging.INFO
