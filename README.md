@@ -97,11 +97,16 @@ nothing else — threaded, because a ping arriving mid-turn has to be answered
 while the model is still talking, and a health check that waits reads as an
 instance worth replacing.
 
-**No build step.** Nothing is imported beyond the standard library and boto3,
-which both runtimes provide, and AgentCore Runtime takes a zip from S3 rather
-than a container image, so there is nothing to build before a deploy. Each
-artifact carries its own package plus `todo_logging`, so a change to the loop
-does not redeploy the Lambda.
+**One build step, and only for the runtime.** Nothing is imported beyond the
+standard library and boto3, and Lambda's image ships boto3 — so the tool
+artifact is the source tree zipped as it stands. AgentCore's image does not:
+it is a bare interpreter, and the first invoke said so with a
+`ModuleNotFoundError` that never reached port 8080. So `scripts/build_runtime.sh`
+installs the pinned closure beside the two packages and terraform zips that
+directory. Every wheel in it is `py3-none-any`, which is why a build on a laptop
+is byte for byte what arm64 Linux runs, and the script fails loudly if a
+compiled extension ever appears. Each artifact carries its own package plus
+`todo_logging`, so a change to the loop does not redeploy the Lambda.
 
 **Reads are bounded in the store, not just in the response.** `list_items`
 returns at most 100 items, `search_items` at most 25 matches, and both caps stop
@@ -207,6 +212,8 @@ pre-commit install --install-hooks && pre-commit install --hook-type pre-push
 pre-commit run --all-files    # everything the hooks enforce, in one go
 
 .venv/bin/pytest              # tests + the coverage gate
+
+scripts/build_runtime.sh      # vendors boto3 into the runtime artifact
 
 cd infrastructure
 terraform init                # state is in S3, so credentials from here on
