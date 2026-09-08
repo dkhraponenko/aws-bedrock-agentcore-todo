@@ -91,6 +91,14 @@ jobs:
         with:
           terraform_wrapper: false
 
+      # AgentCore's image has no boto3, so the artifact carries its own
+      # dependencies and something has to stage them before terraform reads the
+      # directory. Not a data source shelling out from inside terraform: that
+      # would also run on every plan, and this runner starts with nothing built.
+      - name: Build the runtime artifact
+        working-directory: ${{ github.workspace }}
+        run: scripts/build_runtime.sh
+
       - name: Init
         run: terraform init -input=false
 
