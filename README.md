@@ -116,7 +116,12 @@ Milk", and a query matching nothing would read the whole partition. It stops at
 25 matches or 500 items examined and reports `truncated`, so the model can say
 there may be more.
 
-**Memory holds what was said, nothing else.** Tool calls are skipped, since
+**Memory holds what was said, nothing else.** Nova narrates itself inside the
+text it returns — `<thinking>` arrives as ordinary content, split across
+whatever deltas the stream happens to use — so the loop filters it out of the
+stream rather than in the client. That keeps the reasoning off the screen, out
+of the stored history, and out of the tokens every later turn is billed for.
+Tool calls are skipped too, since
 Converse wants every `toolUse` answered by a matching `toolResult` in the same
 sequence. The question is written before the model runs: a turn can die halfway
 through, and the question is the only part that cannot be reconstructed. Reading
