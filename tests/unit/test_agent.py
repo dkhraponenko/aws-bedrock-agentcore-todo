@@ -26,6 +26,14 @@ def text_stream(text: str) -> list[dict[str, Any]]:
     ]
 
 
+def deltas(*chunks: str) -> list[dict[str, Any]]:
+    """A model turn whose text is split across deltas at the given points."""
+    return [
+        *({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": chunk}}} for chunk in chunks),
+        {"messageStop": {"stopReason": "end_turn"}},
+    ]
+
+
 def tool_stream(arguments: str, tool_use_id: str = "tu-1", name: str = TOOL_NAME) -> list[dict[str, Any]]:
     """A model turn that calls one tool, with its arguments split across deltas."""
     half = len(arguments) // 2
@@ -129,6 +137,62 @@ def test_answers_without_tools_and_records_both_turns(memory_client: DictMemoryC
         {"role": "USER", "content": {"text": "hi"}},
         {"role": "ASSISTANT", "content": {"text": "Hello."}},
     ]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(("<thinking>I will add it.</thinking>Added.",), id="one-delta"),
+        pytest.param(("<thin", "king>I will", " add it.</thin", "king>Added."), id="tags-split-across-deltas"),
+        pytest.param(("<thinking>I will add it.</thinking>", "Added."), id="answer-in-its-own-delta"),
+    ],
+)
+def test_the_models_reasoning_never_reaches_the_user(
+    memory_client: DictMemoryClient,
+    chunks: tuple[str, ...],
+) -> None:
+    """Nova writes <thinking> into ordinary text, split wherever the stream splits."""
+    agent = build_agent(FakeBedrock(deltas(*chunks)), FakeGateway(), memory_client)
+
+    events = list(agent.run("alice", "session-1", "add buy a milk"))
+
+    spoken = "".join(event["text"] for event in events if event["type"] == "text")
+    assert spoken == "Added."
+    # And it is not replayed to the model, or paid for, on every later turn.
+    stored = [event["payload"][0]["conversational"] for event in memory_client.events]
+    assert stored[-1] == {"role": "ASSISTANT", "content": {"text": "Added."}}
+
+
+def test_text_that_only_resembles_a_tag_is_still_shown(memory_client: DictMemoryClient) -> None:
+    """The held-back tail has to be released once no delta can complete a tag."""
+    agent = build_agent(FakeBedrock(deltas("Done, 2 items <", "3 left.")), FakeGateway(), memory_client)
+
+    events = list(agent.run("alice", "session-1", "hi"))
+
+    assert "".join(event["text"] for event in events if event["type"] == "text") == "Done, 2 items <3 left."
+
+
+def test_a_message_ending_mid_tag_still_shows_its_last_character(memory_client: DictMemoryClient) -> None:
+    """Nothing more can arrive to complete the tag, so the tail is text after all."""
+    agent = build_agent(FakeBedrock(deltas("All done <")), FakeGateway(), memory_client)
+
+    events = list(agent.run("alice", "session-1", "hi"))
+
+    assert "".join(event["text"] for event in events if event["type"] == "text") == "All done <"
+
+
+def test_an_unclosed_thinking_block_shows_nothing_and_says_so(
+    memory_client: DictMemoryClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Swallowing an answer and swallowing reasoning look identical from here."""
+    agent = build_agent(FakeBedrock(deltas("<thinking>I am not finished")), FakeGateway(), memory_client)
+
+    with caplog.at_level("WARNING", logger="todo_runtime.agent"):
+        events = list(agent.run("alice", "session-1", "hi"))
+
+    assert [event for event in events if event["type"] == "text"] == []
+    assert "unclosed" in caplog.text
 
 
 @pytest.mark.parametrize(

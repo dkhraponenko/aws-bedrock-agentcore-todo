@@ -55,6 +55,65 @@ class AgentConfig:
     max_iterations: int = MAX_ITERATIONS
 
 
+class _ThinkingFilter:
+    """Removes the model's reasoning from a stream of text deltas.
+
+    Nova writes `<thinking>...</thinking>` into ordinary content, and the tags
+    arrive split across deltas, so the tail that could still become a tag is
+    held back until the next delta decides it.
+    """
+
+    _OPEN = "<thinking>"
+    _CLOSE = "</thinking>"
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._inside = False
+
+    def feed(self, text: str) -> str:
+        """Return the part of this delta the user should see, which may be none."""
+        self._buffer += text
+        visible: list[str] = []
+
+        while True:
+            marker = self._CLOSE if self._inside else self._OPEN
+            found = self._buffer.find(marker)
+            if found >= 0:
+                if not self._inside:
+                    visible.append(self._buffer[:found])
+                self._buffer = self._buffer[found + len(marker) :]
+                self._inside = not self._inside
+                continue
+
+            # No whole tag: keep what could still grow into one, and let the
+            # rest through — or drop it, if this is reasoning.
+            keep = _partial_tag_length(self._buffer, marker)
+            if not self._inside:
+                visible.append(self._buffer[: len(self._buffer) - keep])
+            self._buffer = self._buffer[len(self._buffer) - keep :]
+            break
+
+        return "".join(visible)
+
+    def flush(self) -> str:
+        """Return whatever the end of the stream leaves held back."""
+        remainder, self._buffer = self._buffer, ""
+        if self._inside:
+            # Everything after an unclosed tag is reasoning, so there is nothing
+            # to show. Logged: a swallowed answer looks the same from here.
+            logger.warning("Model left a thinking block unclosed")
+            return ""
+        return remainder
+
+
+def _partial_tag_length(text: str, tag: str) -> int:
+    """How many characters at the end of `text` could still become `tag`."""
+    for length in range(min(len(text), len(tag) - 1), 0, -1):
+        if text.endswith(tag[:length]):
+            return length
+    return 0
+
+
 class _StreamedMessage:
     """Reassembles one Converse stream into a message.
 
@@ -65,6 +124,8 @@ class _StreamedMessage:
     def __init__(self) -> None:
         self._text: dict[int, list[str]] = {}
         self._tools: dict[int, dict[str, Any]] = {}
+        self._thinking = _ThinkingFilter()
+        self._text_index = 0
         self.stop_reason = ""
 
     def consume(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -82,13 +143,20 @@ class _StreamedMessage:
             index = delta_event["contentBlockIndex"]
             delta = delta_event["delta"]
             if (text := delta.get("text")) is not None:
-                self._text.setdefault(index, []).append(text)
-                yield {"type": "text", "text": text}
+                self._text_index = index
+                if visible := self._thinking.feed(text):
+                    self._text.setdefault(index, []).append(visible)
+                    yield {"type": "text", "text": visible}
             elif (tool_delta := delta.get("toolUse")) and index in self._tools:
                 self._tools[index]["fragments"].append(tool_delta.get("input", ""))
 
         elif stop := event.get("messageStop"):
             self.stop_reason = stop["stopReason"]
+            # Held-back text is only known to be text once no more deltas can
+            # turn it into a tag, and that is here.
+            if remainder := self._thinking.flush():
+                self._text.setdefault(self._text_index, []).append(remainder)
+                yield {"type": "text", "text": remainder}
 
     @property
     def content(self) -> list[dict[str, Any]]:
