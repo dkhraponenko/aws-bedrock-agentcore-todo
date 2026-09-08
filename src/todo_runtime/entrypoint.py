@@ -66,15 +66,18 @@ class AgentService:
     def setup(cls) -> None:
         """Build the model client, the gateway client and the memory binding.
 
-        Runs at import: a missing setting should stop the first invocation with
-        the variable's name, not surface deep inside someone's conversation.
+        Runs at import, so a missing setting stops the first invocation by name
+        rather than surfacing inside someone's conversation.
         """
         region = os.environ.get("AWS_REGION", "us-east-1")
         session = boto3.Session()
 
+        # region_name on every client: botocore reads only AWS_DEFAULT_REGION,
+        # which Lambda sets and AgentCore is not documented to.
         cls._agent = TodoAgent(
             bedrock=session.client(
                 "bedrock-runtime",
+                region_name=region,
                 config=Config(connect_timeout=5, read_timeout=120, retries={"max_attempts": 2}),
             ),
             gateway=GatewayClient(
@@ -83,7 +86,7 @@ class AgentService:
                 credentials=session.get_credentials(),
             ),
             memory=ConversationMemory(
-                client=session.client("bedrock-agentcore"),
+                client=session.client("bedrock-agentcore", region_name=region),
                 memory_id=_require_env("MEMORY_ID"),
             ),
             config=AgentConfig(
