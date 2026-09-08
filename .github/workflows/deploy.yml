@@ -28,11 +28,27 @@ env:
   TF_IN_AUTOMATION: "true"
 
 jobs:
+  # A job of its own, with no needs, so it starts immediately and alone. As a
+  # first step of the terraform job it was correct but useless: that job waits
+  # for checks, so a mistyped confirmation took three minutes of test suite to
+  # report itself. Nothing here reads the repository or holds a credential.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Two clicks separate apply from destroy in that dropdown, so the second
+      # one has to be typed out.
+      - name: Confirm a destroy
+        if: inputs.action == 'destroy' && inputs.confirm != 'todo-agent'
+        run: |
+          echo "destroy requires confirm to be exactly: todo-agent" >&2
+          exit 1
+
   checks:
     uses: ./.github/workflows/checks.yml
 
   terraform:
-    needs: checks
+    needs: [guard, checks]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Only this job mints an OIDC token, so only this job is granted one. The
@@ -46,16 +62,6 @@ jobs:
         working-directory: infrastructure
 
     steps:
-      # First step on purpose: before the checkout, and before any credential
-      # exists. Two clicks separate apply from destroy in that dropdown, so the
-      # second one has to be typed out.
-      - name: Confirm a destroy
-        if: inputs.action == 'destroy' && inputs.confirm != 'todo-agent'
-        working-directory: ${{ github.workspace }}
-        run: |
-          echo "destroy requires confirm to be exactly: todo-agent" >&2
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
