@@ -221,9 +221,11 @@ make a fresh clone fail to commit. The provider lock files carry hashes for
 Linux as well as macOS, because a lock written on one platform is rewritten by
 `terraform init` on the other, and the commit hook reports that as an
 uncommitted change. Deploying is a second workflow, run from a
-button — `plan`, `apply` or `destroy` — and `destroy` refuses to start unless
-the project name is typed into it. The runner reaches AWS through OIDC, so
-there is no access key stored in GitHub either.
+button — `plan`, `plan-destroy`, `apply` or `destroy`. Both of the last two
+apply a plan file the log has already printed, so a removal is listed before it
+happens and `plan-destroy` stops after that listing; `destroy` itself refuses to
+start unless the project name is typed into it. The runner reaches AWS through
+OIDC, so there is no access key stored in GitHub either.
 
 State lives in S3. `infrastructure/bootstrap/` creates that bucket, the identity
 provider and the role Actions assumes; it is applied once by hand, because

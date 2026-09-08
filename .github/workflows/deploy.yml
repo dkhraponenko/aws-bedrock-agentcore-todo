@@ -8,7 +8,10 @@ on:
       action:
         description: What to run against AWS
         type: choice
-        options: [plan, apply, destroy]
+        # plan-destroy exists because the two are not opposites: plan shows what
+        # would be built, and without this there was no way to read the list of
+        # things a destroy would remove except by removing them.
+        options: [plan, plan-destroy, apply, destroy]
         default: plan
       confirm:
         description: For destroy only - type todo-agent
@@ -37,7 +40,7 @@ jobs:
     timeout-minutes: 5
     steps:
       # Two clicks separate apply from destroy in that dropdown, so the second
-      # one has to be typed out.
+      # one has to be typed out. plan-destroy is exempt: it only reads.
       - name: Confirm a destroy
         if: inputs.action == 'destroy' && inputs.confirm != 'todo-agent'
         run: |
@@ -82,9 +85,10 @@ jobs:
 
       # Always a saved plan, even for apply. What the log shows is then the plan
       # that ran, not a description of what a second plan would have decided.
-      # destroy takes the same path, so it is shown before it happens.
+      # Both destroy actions take this same path, so a removal is always shown
+      # before anything is removed - and plan-destroy stops right here.
       - name: Plan
-        run: terraform plan -input=false -out=tfplan ${{ inputs.action == 'destroy' && '-destroy' || '' }}
+        run: terraform plan -input=false -out=tfplan ${{ contains(inputs.action, 'destroy') && '-destroy' || '' }}
 
       - name: Plan summary
         run: |
@@ -94,6 +98,9 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Named rather than negated. `!= 'plan'` would have quietly applied
+      # plan-destroy the day it was added, and would do the same to whatever
+      # read-only action is added next.
       - name: Apply
-        if: inputs.action != 'plan'
+        if: inputs.action == 'apply' || inputs.action == 'destroy'
         run: terraform apply -input=false tfplan
