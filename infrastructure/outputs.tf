@@ -30,11 +30,14 @@ output "dynamodb_table_name" {
 
 output "chat_command" {
   description = "Ready-to-run command for the manual smoke-test script."
-  # Absolute script path, so `eval "$(terraform output -raw chat_command)"`
-  # works from this directory rather than only from the repository root.
+  # Relative, because this is resolved where the apply runs and the apply runs
+  # in Actions: abspath() baked the runner's own checkout path into the state
+  # and handed it back to a laptop that has no such directory. path.root is
+  # whatever the caller pointed terraform at, so the result stays correct from
+  # infrastructure/ — which is where the README says to run this from.
   value = join(" ", [
     "AWS_REGION=${var.aws_region}",
     "AGENT_RUNTIME_ARN=${aws_bedrockagentcore_agent_runtime.todo.agent_runtime_arn}",
-    "python ${abspath("${path.root}/../scripts/chat.py")}",
+    "python ${path.root}/../scripts/chat.py",
   ])
 }
