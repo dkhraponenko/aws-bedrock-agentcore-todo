@@ -1,12 +1,12 @@
-"""AgentCore Runtime entry point: build the agent once, stream one turn per call.
+"""One turn: build the agent once at import, stream the turn as it happens.
 
-Identity arrives in the payload rather than being derived here, and this module
-cannot re-check it: the runtime sees an IAM principal, not an end user. The
-trust boundary is therefore whoever holds `InvokeAgentRuntime` on this runtime
-— today only the operator running `scripts/chat.py`, which sends whatever
-`USER_ID` says. Everything downstream partitions by that value, so the
-isolation is real end to end; what is missing is a client that *establishes*
-who the user is and puts a verified subject in the payload.
+`todo_runtime.server` is what AgentCore starts; this module is what it calls per
+request and knows nothing about the transport.
+
+Identity arrives in the payload and cannot be re-checked here, because the
+runtime sees an IAM principal rather than an end user. The trust boundary is
+therefore whoever holds `InvokeAgentRuntime`: the isolation downstream is real,
+what is missing is a client that establishes who the user is.
 """
 
 from __future__ import annotations
@@ -87,18 +87,12 @@ class AgentService:
 
     @classmethod
     def stream(cls, payload: dict[str, Any]) -> Iterator[str]:
-        """Run one turn, yielding server-sent events.
+        """Run one turn, yielding `data: {...}` frames and then a `done` event.
 
-        SSE is produced here rather than in the proxy so that the proxy stays a
-        pipe: it forwards bytes and adds nothing of its own.
-
-        Args:
-            payload: `{"prompt": str, "user_id": str, "session_id": str}`.
-                `prompt` and `user_id` are both required; a turn missing either
-                is answered with an error frame rather than a substituted value.
-
-        Yields:
-            `data: {...}` frames, ending with a `done` event.
+        The frames are built here, not in `todo_runtime.server`, so the server
+        stays a pipe. `payload` is `{"prompt", "user_id", "session_id"}`; a turn
+        missing either of the first two is answered with an error frame rather
+        than a substituted value.
 
         Raises:
             RuntimeError: `setup()` was never called.
@@ -137,8 +131,3 @@ def _frame(event: dict[str, Any]) -> str:
 
 
 AgentService.setup()
-
-
-def invoke(payload: dict[str, Any]) -> Iterator[str]:
-    """Entry point named by the runtime's `entry_point` configuration."""
-    return AgentService.stream(payload)

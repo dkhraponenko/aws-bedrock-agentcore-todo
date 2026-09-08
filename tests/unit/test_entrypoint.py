@@ -1,4 +1,4 @@
-"""The runtime entry point: configuration, framing and failure containment."""
+"""One turn: configuration, framing and failure containment."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from todo_runtime import entrypoint
-from todo_runtime.entrypoint import AgentService, invoke
+from todo_runtime.entrypoint import AgentService
 
 
 if TYPE_CHECKING:
@@ -66,7 +66,7 @@ def test_events_are_rendered_as_sse(monkeypatch: pytest.MonkeyPatch) -> None:
     agent = FakeAgent([{"type": "text", "text": "Hello."}, {"type": "done"}])
     monkeypatch.setattr(AgentService, "_agent", agent)
 
-    stream = list(invoke({"prompt": "hi", "user_id": "alice", "session_id": "s-1"}))
+    stream = list(AgentService.stream({"prompt": "hi", "user_id": "alice", "session_id": "s-1"}))
 
     assert stream[0] == 'data: {"type": "text", "text": "Hello."}\n\n'
     assert agent.calls == [("alice", "s-1", "hi")]
@@ -82,7 +82,7 @@ def test_a_turn_without_an_identity_is_refused(payload: dict[str, Any], monkeypa
     agent = FakeAgent([{"type": "done"}])
     monkeypatch.setattr(AgentService, "_agent", agent)
 
-    assert frames(invoke(payload)) == [
+    assert frames(AgentService.stream(payload)) == [
         {"type": "error", "message": "Missing user_id."},
         {"type": "done"},
     ]
@@ -94,7 +94,7 @@ def test_an_absent_session_still_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     agent = FakeAgent([{"type": "done"}])
     monkeypatch.setattr(AgentService, "_agent", agent)
 
-    list(invoke({"prompt": "hi", "user_id": "alice"}))
+    list(AgentService.stream({"prompt": "hi", "user_id": "alice"}))
 
     assert agent.calls == [("alice", entrypoint.DEFAULT_SESSION_ID, "hi")]
 
@@ -103,7 +103,7 @@ def test_an_absent_session_still_defaults(monkeypatch: pytest.MonkeyPatch) -> No
 def test_an_empty_prompt_is_answered_not_raised(payload: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(AgentService, "_agent", FakeAgent())
 
-    assert frames(invoke(payload)) == [
+    assert frames(AgentService.stream(payload)) == [
         {"type": "error", "message": "Empty prompt."},
         {"type": "done"},
     ]
@@ -113,7 +113,7 @@ def test_a_failing_turn_still_closes_the_stream(monkeypatch: pytest.MonkeyPatch)
     """The client waits for `done`; an exception must not leave it hanging."""
     monkeypatch.setattr(AgentService, "_agent", FakeAgent(error=RuntimeError("gateway down")))
 
-    assert frames(invoke({"prompt": "hi", "user_id": "alice"})) == [
+    assert frames(AgentService.stream({"prompt": "hi", "user_id": "alice"})) == [
         {"type": "error", "message": "RuntimeError: gateway down"},
         {"type": "done"},
     ]
