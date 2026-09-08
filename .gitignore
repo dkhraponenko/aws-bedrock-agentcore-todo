@@ -27,3 +27,7 @@ htmlcov/
 
 # Logs downloaded from a workflow run; GitHub names them logs_<run id>
 logs*/
+
+# The diagram's PNG is rendered to be looked at; the committed SVG is what the
+# README shows, and both come back from docs/architecture_diagram.py.
+docs/*@2x.png
