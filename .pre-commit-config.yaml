@@ -72,6 +72,18 @@ repos:
           - --hook-config=--retry-once-with-cleanup=true
           - --tf-init-args=-backend=false
 
+  # The one thing terraform_validate structurally cannot see: the backend block
+  # is parsed before variables exist, so the state bucket is named by a literal
+  # in two files and nothing checks that the two still agree.
+  - repo: local
+    hooks:
+      - id: state-bucket-name
+        name: backend and bootstrap name the same bucket
+        entry: scripts/check_state_bucket.sh
+        language: system
+        files: ^infrastructure/(backend\.tf|bootstrap/variables\.tf)$
+        pass_filenames: false
+
   # --- tests -------------------------------------------------------------------------
   # On push rather than on commit: the suite takes seconds, but a failing
   # coverage gate should not block writing down work in progress.
