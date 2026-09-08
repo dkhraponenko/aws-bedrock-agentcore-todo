@@ -8,7 +8,8 @@ Gateway to a Lambda, which reads and writes DynamoDB. All of it is Terraform.
 
 There are three Python packages: `todo_agent` is the tool Lambda, `todo_runtime`
 is the agent loop and the server that hosts it, and `todo_logging` is a JSON log
-formatter that ships inside both.
+formatter that ships inside both. `src/main.py` is the fourth file AgentCore
+needs and the only one outside a package; the design note below says why.
 
 Every hop is a separate IAM identity. The runtime calls the model and the
 gateway, the gateway invokes the Lambda, the Lambda touches the table. No hop
@@ -121,9 +122,8 @@ text it returns — `<thinking>` arrives as ordinary content, split across
 whatever deltas the stream happens to use — so the loop filters it out of the
 stream rather than in the client. That keeps the reasoning off the screen, out
 of the stored history, and out of the tokens every later turn is billed for.
-Tool calls are skipped too, since
-Converse wants every `toolUse` answered by a matching `toolResult` in the same
-sequence. The question is written before the model runs: a turn can die halfway
+Tool calls are skipped too, since Converse wants every `toolUse` answered by a
+matching `toolResult` in the same sequence. The question is written before the model runs: a turn can die halfway
 through, and the question is the only part that cannot be reconstructed. Reading
 history back fills in an answer that never arrived, because Converse rejects two
 user messages in a row.
@@ -159,7 +159,9 @@ is a real input. The identity is out of the model's reach, so the worst case
 stays inside the attacker's own partition, and nothing exfiltrates. The same
 user's own data is still reachable.
 
-Logs carry ids, never item text, and expire after 14 days. They are JSON: the
+Logs carry ids, never item text. Retention is set on the Lambda's group, which
+Terraform owns, and expires after 14 days; the runtime's group is created by
+AgentCore itself on first start and this stack sets nothing on it. They are JSON: the
 call sites pass context through `logging`'s `extra=`, which the standard library
 attaches to the record and then never prints, and `todo_logging` supplies the
 formatter that does. The table has SSE and point-in-time recovery, and there are
@@ -206,7 +208,8 @@ abandoned tab keeps costing until the session expires, which is what
 
 The tool plumbing rounds to zero: Lambda, DynamoDB and the gateway together are
 under 0.5% of a conversation. Idle cost is tool indexing plus a few KB in S3,
-about **$0.001/month**.
+about **$0.001/month** — plus whatever has collected in the runtime's own log
+group, which is the one thing here nothing expires.
 
 ## Running it
 
@@ -227,7 +230,9 @@ eval "$(terraform output -raw chat_command)"
 ```
 
 Hooks run ruff, mypy, `terraform fmt` and `validate` on commit, plus a hygiene
-set. On push they run the suite behind a 95% branch-coverage floor over both
+set and one local check that the state bucket is spelled the same in the backend
+block and in bootstrap — the one thing `terraform_validate` structurally cannot
+see. On push they run the suite behind a 95% branch-coverage floor over all three
 source packages, currently 99%. `scripts/` and `docs/` are excluded, since no
 test imports them.
 
@@ -260,7 +265,9 @@ against its own role, the provider and the state bucket.
 Everything below the model runs offline, without credentials.
 `test_tool_contract.py` drives the real `lambda_handler` on moto through the
 `(event, client_context)` pair the gateway would deliver. `test_agent.py` runs
-the shipped loop against a scripted Converse stream. `test_mcp.py` replaces
+the shipped loop against a scripted Converse stream. `test_server.py` starts the
+real server on a real socket and speaks the AgentCore contract to it: `/ping`,
+`/invocations`, chunked SSE and an oversized body. `test_mcp.py` replaces
 `urlopen` and checks the framing, handshake and SigV4 headers.
 `terraform init -backend=false && terraform validate` covers the HCL without
 reaching for the state bucket, which is what the commit hook does.
@@ -293,5 +300,7 @@ different values across two runs to watch the isolation from outside.
 MIT, in `LICENSE`.
 
 The code, not the pictures: the service glyphs in `docs/architecture.svg` are the
-official AWS Architecture Icons, inlined unmodified and still AWS's. The pack is
-not redistributed here — `docs/build_diagram.py` reads it from `ICON_PACK`.
+official AWS Architecture Icons, inlined unmodified and still AWS's. The pack
+itself is not redistributed here. `docs/architecture_diagram.py` is the spec the
+picture is generated from; regenerating it needs the renderer that carries the
+icons, and the SVG is committed so that reading the repository does not.
