@@ -7,8 +7,8 @@ Gateway to a Lambda, which reads and writes DynamoDB. All of it is Terraform.
 <img src="docs/architecture.svg" alt="An AgentCore Runtime loop calling tools through a gateway into a Lambda and DynamoDB" width="1000">
 
 There are three Python packages: `todo_agent` is the tool Lambda, `todo_runtime`
-is the agent loop, and `todo_logging` is a JSON log formatter that ships inside
-both.
+is the agent loop and the server that hosts it, and `todo_logging` is a JSON log
+formatter that ships inside both.
 
 Every hop is a separate IAM identity. The runtime calls the model and the
 gateway, the gateway invokes the Lambda, the Lambda touches the table. No hop
@@ -86,6 +86,16 @@ an `error` key, and the model decides what to do next.
 The gateway is a plain MCP endpoint, so no boto3 call reaches it. `mcp.py` does
 the JSON-RPC framing and signs each request with botocore's SigV4 signer, in
 about 200 lines and no new dependency.
+
+**What AgentCore starts is a process, not a function.** The runtime unpacks the
+zip and runs `main.py` — which is why that file sits at the source root rather
+than inside a package, since a path into one would put the package's directory
+on `sys.path` instead of the archive root. From there the contract is HTTP on
+port 8080: `POST /invocations` carries the turn, `GET /ping` decides whether the
+instance is still healthy. `server.py` is that contract over `http.server` and
+nothing else — threaded, because a ping arriving mid-turn has to be answered
+while the model is still talking, and a health check that waits reads as an
+instance worth replacing.
 
 **No build step.** Nothing is imported beyond the standard library and boto3,
 which both runtimes provide, and AgentCore Runtime takes a zip from S3 rather
