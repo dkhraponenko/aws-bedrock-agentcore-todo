@@ -1,0 +1,21 @@
+# What AgentCore Runtime does not provide.
+#
+# Lambda ships boto3 in its image; AgentCore ships a bare interpreter, and the
+# first invoke said so — ModuleNotFoundError on `import boto3`, in the traceback
+# that never reached port 8080. So the runtime artifact carries its own copy
+# while the Lambda artifact still imports the platform's.
+#
+# The whole closure is pinned, not just the top of it. A floating transitive
+# dependency changes the zip's hash, and a changed hash is a redeployment: the
+# artifact would move because PyPI moved, on an apply that changed nothing.
+#
+# Every one of these is a py3-none-any wheel, which is why a build on macOS is
+# byte for byte what arm64 Linux runs. scripts/build_runtime.sh fails loudly if
+# that ever stops being true.
+boto3==1.43.90
+botocore==1.43.90
+jmespath==1.1.0
+python-dateutil==2.9.0.post0
+s3transfer==0.19.2
+six==1.17.0
+urllib3==2.7.0

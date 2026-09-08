@@ -15,12 +15,6 @@ locals {
   # and a second copy is a thing that drifts.
   shared_package = "todo_logging/"
 
-  # AgentCore Runtime executes its entry point as a script against the root of
-  # the unpacked archive, so this one file has to sit beside the packages rather
-  # than inside one. The Lambda has no equivalent: its handler is imported, not
-  # run, which is why the exclusion below drops this file from that zip.
-  runtime_launcher = "main.py"
-
   # archive_file takes literal paths, not globs, so the exclusion lists are
   # computed. Bytecode a local test run left behind has to stay out, or the zip
   # hash — and therefore the deployment — changes without the source changing.
@@ -36,20 +30,11 @@ locals {
       if !startswith(file, "todo_agent/") && !startswith(file, local.shared_package)
     ],
   ))
-
-  runtime_excludes = toset(concat(
-    local.bytecode,
-    [
-      for file in local.source_files : file
-      if !startswith(file, "todo_runtime/") && !startswith(file, local.shared_package)
-      && file != local.runtime_launcher
-    ],
-  ))
 }
 
-# Neither artifact imports anything beyond the standard library and boto3, which
-# both runtimes already provide — so the source tree zips directly and
-# `terraform plan` works straight after `git clone`.
+# The Lambda's image ships boto3 and nothing here imports anything else beyond
+# the standard library, so this artifact is still the source tree zipped as it
+# stands.
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = local.source_root
@@ -57,9 +42,14 @@ data "archive_file" "lambda" {
   excludes    = local.lambda_excludes
 }
 
+# The runtime's is not, because AgentCore's image has no boto3 in it — the first
+# invoke found that out, with a ModuleNotFoundError that never reached port 8080.
+# scripts/build_runtime.sh stages the two packages, the launcher AgentCore runs
+# and the pinned dependencies into one directory, and that directory is what is
+# zipped here. It has to have run before a plan reads this: the deploy workflow
+# runs it as a step, and the README names it beside `terraform apply`.
 data "archive_file" "runtime" {
   type        = "zip"
-  source_dir  = local.source_root
+  source_dir  = "${path.module}/build/runtime"
   output_path = "${path.module}/build/runtime.zip"
-  excludes    = local.runtime_excludes
 }
