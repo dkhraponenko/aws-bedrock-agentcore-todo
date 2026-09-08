@@ -39,13 +39,13 @@ variable "runtime_python_version" {
 
 variable "runtime_entry_point" {
   description = <<-EOT
-    What AgentCore Runtime calls to start a turn. The API documents this only as
-    "the function or method that should be invoked", so the exact binding is
-    confirmed on the first apply; it is a variable rather than a literal so
-    correcting it does not need a code change.
+    The command AgentCore Runtime runs to start the agent. This is argv, not an
+    import path: the last element is a .py file resolved against the root of the
+    unpacked zip, and the service rejects anything else. Prefixing it with
+    "opentelemetry-instrument" is how the documented traces get turned on.
   EOT
   type        = list(string)
-  default     = ["todo_runtime.entrypoint.invoke"]
+  default     = ["main.py"]
 }
 
 variable "runtime_idle_timeout_seconds" {

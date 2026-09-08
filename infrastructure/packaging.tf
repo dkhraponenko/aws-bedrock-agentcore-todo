@@ -15,6 +15,12 @@ locals {
   # and a second copy is a thing that drifts.
   shared_package = "todo_logging/"
 
+  # AgentCore Runtime executes its entry point as a script against the root of
+  # the unpacked archive, so this one file has to sit beside the packages rather
+  # than inside one. The Lambda has no equivalent: its handler is imported, not
+  # run, which is why the exclusion below drops this file from that zip.
+  runtime_launcher = "main.py"
+
   # archive_file takes literal paths, not globs, so the exclusion lists are
   # computed. Bytecode a local test run left behind has to stay out, or the zip
   # hash — and therefore the deployment — changes without the source changing.
@@ -36,6 +42,7 @@ locals {
     [
       for file in local.source_files : file
       if !startswith(file, "todo_runtime/") && !startswith(file, local.shared_package)
+      && file != local.runtime_launcher
     ],
   ))
 }
