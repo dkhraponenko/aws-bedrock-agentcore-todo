@@ -92,7 +92,13 @@ resource "aws_bedrockagentcore_agent_runtime" "todo" {
     AGENT_MODEL = var.agent_model
     # Passed as configuration rather than shipped in the zip, so the prompt has
     # one home and editing it does not rebuild the artifact.
-    AGENT_INSTRUCTION = local.agent_instruction
+    #
+    # Escaped because AgentCore rejects an environment variable containing any
+    # control character, and a system prompt is paragraphs: the newlines travel
+    # as the two characters \n and todo_runtime.entrypoint puts them back.
+    # Collapsing them to spaces was the alternative, and it runs four separate
+    # instructions into one wall of text.
+    AGENT_INSTRUCTION = replace(local.agent_instruction, "\n", "\\n")
     LOG_LEVEL         = "INFO"
   }
 

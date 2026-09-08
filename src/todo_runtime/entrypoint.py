@@ -29,15 +29,23 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
-# Installs the JSON formatter as well as setting the level: without it the
-# `extra=` context below is attached to each record and then never printed.
+# Installs the JSON formatter as well as the level: without it the `extra=`
+# context below is attached to each record and never printed.
 configure(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-# A session names a conversation, so defaulting one is harmless. There is no
-# equivalent default for the caller: every store below partitions by that
-# value, and a stand-in would put unrelated people in one partition.
+# Defaulting a session is harmless. The caller has no equivalent default: a
+# stand-in would put unrelated people in one partition.
 DEFAULT_SESSION_ID = "default"
+
+
+def _instruction() -> str:
+    r"""Return the system prompt with its paragraphs put back.
+
+    AgentCore refuses an environment variable carrying a control character, so
+    `runtime.tf` sends the newlines as the two characters `\n`.
+    """
+    return _require_env("AGENT_INSTRUCTION").replace("\\n", "\n")
 
 
 def _require_env(name: str) -> str:
@@ -80,7 +88,7 @@ class AgentService:
             ),
             config=AgentConfig(
                 model_id=_require_env("AGENT_MODEL"),
-                system_prompt=_require_env("AGENT_INSTRUCTION"),
+                system_prompt=_instruction(),
                 max_iterations=int(os.environ.get("MAX_ITERATIONS", str(MAX_ITERATIONS))),
             ),
         )

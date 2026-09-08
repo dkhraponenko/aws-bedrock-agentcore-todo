@@ -48,6 +48,19 @@ def test_setup_ran_at_import() -> None:
     assert AgentService._agent is not None
 
 
+def test_the_prompt_arrives_escaped_and_is_put_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AgentCore refuses a control character, so the newlines travel as two."""
+    monkeypatch.setenv("AGENT_INSTRUCTION", r"One line.\nAnother.\n\nA new paragraph.")
+
+    assert entrypoint._instruction() == "One line.\nAnother.\n\nA new paragraph."
+
+
+def test_a_prompt_without_escapes_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_INSTRUCTION", "You are a todo assistant.")
+
+    assert entrypoint._instruction() == "You are a todo assistant."
+
+
 def test_setup_names_the_missing_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MEMORY_ID")
 
