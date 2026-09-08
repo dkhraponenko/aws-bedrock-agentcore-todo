@@ -66,14 +66,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing below this line talks to git again, and the default leaves
+          # the job's token written into .git/config for every later step and
+          # every process they start.
+          persist-credentials: false
 
       - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           # A secret rather than a variable: it carries the account id, and
           # terraform prints ARNs into logs that go public with the repository.
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          # Masking the secret only hides that one string. The same account id
+          # appears inside every other ARN a plan prints - arn:aws:logs:...:<id>
+          # - and this is what redacts those too.
+          mask-aws-account-id: true
           # Matches var.aws_region and the backend block, both of which default
-          # to us-east-1.
+          # to us-east-1. Deliberately not a secret: GitHub redacts secrets by
+          # substring, so masking a region would blank it inside every ARN in
+          # the log and leave the plan unreadable.
           aws-region: us-east-1
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
