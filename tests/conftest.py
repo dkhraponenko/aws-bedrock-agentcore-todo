@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import boto3
 import pytest
+from boto3.dynamodb.conditions import Key
+from dotenv import dotenv_values
 from moto import mock_aws
 
 from todo_agent.models import TOOL_NAME_KEY, TOOL_NAME_SEPARATOR, USER_ID_KEY
 from todo_agent.service import TodoService
 from todo_agent.store import TodoStore
+from todo_runtime.mcp import GatewayClient
 
 
 if TYPE_CHECKING:
@@ -125,3 +130,149 @@ def aws_credentials() -> Generator[None]:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
+
+
+# --------------------------------------------------------------------------
+# The deployed stack.
+#
+# Everything above substitutes AWS; everything below reaches the real thing and
+# is therefore marked `aws` and deselected by default. The fixtures live in this
+# shared conftest rather than beside one test because both layers that reach a
+# deployed stack need them: the gateway tests in integration_tests/, which stop
+# short of the model, and the conversation tests in e2e/, which do not.
+#
+# Nothing here fails when the stack is unreachable. A fresh clone has no .env
+# and a laptop without a profile has no credentials; neither is a defect in the
+# code under test, so both skip.
+# --------------------------------------------------------------------------
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+@dataclass(frozen=True)
+class DeployedStack:
+    """What the deployed stack has to say about itself before a test can reach it."""
+
+    region: str
+    gateway_url: str
+    table_name: str
+
+    @classmethod
+    def from_env_file(cls, path: Path) -> DeployedStack:
+        """Read the configuration out of the .env file itself.
+
+        Deliberately not `os.environ`: `[tool.pytest_env]` in pyproject.toml
+        already sets GATEWAY_URL and the rest to stand-ins, so that
+        todo_runtime can be imported at all, and it sets them over whatever the
+        shell exported. Reading the file directly keeps the deployed values and
+        the offline stand-ins from being the same names in one process.
+        """
+        values = dotenv_values(path)
+        return cls(
+            region=values.get("AWS_REGION") or "",
+            gateway_url=values.get("GATEWAY_URL") or "",
+            table_name=values.get("DYNAMODB_TABLE_NAME") or "",
+        )
+
+    def missing(self) -> list[str]:
+        """Return the names of the settings that are absent or empty."""
+        present = {"AWS_REGION": self.region, "GATEWAY_URL": self.gateway_url, "DYNAMODB_TABLE_NAME": self.table_name}
+        return [name for name, value in present.items() if not value]
+
+
+@pytest.fixture(scope="session")
+def deployed() -> DeployedStack:
+    """The deployed stack's coordinates, or a skip explaining how to get them."""
+    if not ENV_FILE.exists():
+        pytest.skip(f"{ENV_FILE.name} is absent; run scripts/sync_env.sh")
+
+    config = DeployedStack.from_env_file(ENV_FILE)
+    if missing := config.missing():
+        pytest.skip(f"{ENV_FILE.name} carries no {', '.join(missing)}; rerun scripts/sync_env.sh")
+    return config
+
+
+@pytest.fixture(scope="session")
+def aws_session(deployed: DeployedStack) -> boto3.Session:
+    """A boto3 session with real credentials, or a skip."""
+    session = boto3.Session(region_name=deployed.region)
+    if session.get_credentials() is None:
+        pytest.skip("no AWS credentials; export AWS_PROFILE")
+    return session
+
+
+@pytest.fixture(scope="session")
+def gateway(deployed: DeployedStack, aws_session: boto3.Session) -> GatewayClient:
+    """The production MCP client, pointed at the deployed gateway.
+
+    The client under test rather than a test-local reimplementation: the
+    handshake, the SigV4 signing and the SSE unwrapping are exactly what
+    test_mcp.py can only check against a substituted urlopen.
+    """
+    return GatewayClient(
+        url=deployed.gateway_url,
+        region=deployed.region,
+        credentials=aws_session.get_credentials(),
+    )
+
+
+@pytest.fixture(scope="session")
+def tool_names(gateway: GatewayClient) -> dict[str, str]:
+    """Bare tool name to the qualified name the gateway publishes it under."""
+    return {name.rpartition(TOOL_NAME_SEPARATOR)[2]: name for name in (tool["name"] for tool in gateway.list_tools())}
+
+
+@pytest.fixture(scope="session")
+def table(deployed: DeployedStack, aws_session: boto3.Session) -> Any:
+    """The real items table, read directly.
+
+    Assertions go through boto3 rather than through TodoStore on purpose: a
+    test that reads back with the same code that wrote would confirm itself.
+    """
+    return aws_session.resource("dynamodb").Table(deployed.table_name)
+
+
+@pytest.fixture
+def make_user(table: Any) -> Generator[Callable[[], str]]:
+    """Hand out throwaway user ids and delete everything they own afterwards.
+
+    Every store in the stack partitions by user_id, so a random one is a
+    private corner of the real table: these tests can run beside a live
+    conversation without either seeing the other.
+    """
+    created: list[str] = []
+
+    def _make() -> str:
+        identity = f"pytest-{uuid.uuid4()}"
+        created.append(identity)
+        return identity
+
+    yield _make
+
+    for identity in created:
+        items = table.query(KeyConditionExpression=Key("user_id").eq(identity)).get("Items", [])
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.delete_item(Key={"user_id": identity, "item_id": item["item_id"]})
+
+
+@pytest.fixture
+def user_id(make_user: Callable[[], str]) -> str:
+    """One throwaway user, for the tests that need only one."""
+    return make_user()
+
+
+@pytest.fixture
+def call(gateway: GatewayClient, tool_names: dict[str, str]) -> Callable[..., dict[str, Any]]:
+    """Call a tool by its bare name, injecting identity the way the runtime does.
+
+    `user_id=None` omits it entirely, which is how the refusal path is reached.
+    """
+
+    def _call(tool: str, user_id: str | None, **arguments: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = dict(arguments)
+        if user_id is not None:
+            payload[USER_ID_KEY] = user_id
+        return gateway.call_tool(tool_names[tool], payload)
+
+    return _call

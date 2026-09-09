@@ -110,8 +110,12 @@ pythonpath = ["src", "."]
 testpaths = ["tests"]
 # --cov here rather than only in CI: the coverage gate is part of "the tests
 # pass", and a threshold nobody runs locally is a threshold that drifts.
-addopts = "-m 'not e2e' --strict-markers --cov"
-markers = ["e2e: hits real AWS; excluded from the default run"]
+addopts = "-m 'not aws' --strict-markers --cov"
+# One marker, and it names the axis it gates: not how much of the system a test
+# covers - the directory says that - but whether it needs a deployed stack,
+# credentials and a synced .env. Both integration_tests/test_gateway_deployed.py
+# and everything in e2e/ carry it, and neither runs unless it is asked for.
+markers = ["aws: reaches deployed AWS; needs credentials and a synced .env"]
 
 [tool.pytest_env]
 AWS_DEFAULT_REGION = "us-east-1"

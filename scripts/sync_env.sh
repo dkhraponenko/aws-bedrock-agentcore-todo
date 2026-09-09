@@ -33,12 +33,15 @@ import os
 from pathlib import Path
 
 
-# Which output feeds which variable. scripts/chat.py reads exactly these two;
-# the other outputs stay a `terraform output` lookup rather than becoming lines
-# in a file that nothing reads and everything can forget to refresh.
+# Which output feeds which variable. Only the ones something actually reads:
+# scripts/chat.py takes the first two, tests/e2e the rest. An output nobody
+# reads is a line that can go stale without anyone noticing, so the remaining
+# outputs stay a `terraform output` lookup.
 FROM_TERRAFORM = {
     "AWS_REGION": "aws_region",
     "AGENT_RUNTIME_ARN": "agent_runtime_arn",
+    "GATEWAY_URL": "gateway_url",
+    "DYNAMODB_TABLE_NAME": "dynamodb_table_name",
 }
 
 # Not an output: this one is the operator's to choose, and two different values
