@@ -226,8 +226,21 @@ scripts/build_runtime.sh      # vendors boto3 into the runtime artifact
 cd infrastructure
 terraform init                # state is in S3, so credentials from here on
 terraform apply
-eval "$(terraform output -raw chat_command)"
+cd ..
+
+scripts/sync_env.sh           # terraform outputs -> .env
+python scripts/chat.py
 ```
+
+`.env` is a cache of two terraform outputs rather than a source of truth: it is
+gitignored, `.env.example` is the committed shape, and `sync_env.sh` rewrites it
+after every apply, because the runtime ARN changes whenever the runtime is
+replaced. Anything already exported beats the file, so
+`USER_ID=bob python scripts/chat.py` switches user for one run without editing
+it. What this replaced was a `chat_command` output that composed the whole
+invocation to be `eval`'d — which made a terraform output a claim about the
+local filesystem, and is how `abspath()` once baked a CI runner's checkout path
+into the state and handed it back to a laptop.
 
 Hooks run ruff, mypy, `terraform fmt` and `validate` on commit, plus a hygiene
 set and one local check that the state bucket is spelled the same in the backend
