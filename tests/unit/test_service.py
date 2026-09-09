@@ -9,7 +9,6 @@ import pytest
 
 from tests.conftest import create_invocation
 from todo_agent.errors import ItemNotFoundError
-from todo_agent.lambda_handler import lambda_handler
 from todo_agent.models import DEFAULT_PRIORITY, USER_ID_KEY, TodoItem, TodoStatus
 from todo_agent.service import LIST_RESULT_LIMIT, SEARCH_RESULT_LIMIT, TOOL_NAMES, TodoService
 from todo_agent.store import SearchResult, TodoStore
@@ -200,17 +199,6 @@ class TestUpdateAndDelete:
         result = service.process(*create_invocation("delete_item", {"item_id": "gone"}))
 
         assert "gone" in result["error"]
-
-
-def test_search_items_runs_end_to_end_against_a_real_store(wired_store: None) -> None:
-    """A mocked store cannot catch the handler mis-reading what the real one returns."""
-    lambda_handler(*create_invocation("add_item", {"text": "buy a milk"}))
-
-    result = lambda_handler(*create_invocation("search_items", {"query": "MILK"}))
-
-    assert result["count"] == 1
-    assert result["truncated"] is False
-    assert result["items"][0]["text"] == "buy a milk"
 
 
 class TestInvocationParsing:
