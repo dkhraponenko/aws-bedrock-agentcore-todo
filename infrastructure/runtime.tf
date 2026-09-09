@@ -105,3 +105,17 @@ resource "aws_bedrockagentcore_agent_runtime" "todo" {
   # The loop calls tools/list on its first turn, so the target has to exist.
   depends_on = [aws_bedrockagentcore_gateway_target.todo]
 }
+
+# Left undeclared, this group is created by AgentCore on first start and keeps
+# its events for ever — which is what it had been doing. Declaring it puts the
+# runtime's logs on the same retention as the Lambda's, and makes a destroy take
+# them along instead of leaving them behind to be paid for.
+#
+# The name is the service's, not a choice: the endpoint suffix is DEFAULT
+# because no other endpoint is declared. Built from the id rather than pasted in,
+# so that replacing the runtime — which changes that id — does not silently
+# leave a second group behind with no retention on it.
+resource "aws_cloudwatch_log_group" "runtime" {
+  name              = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.todo.agent_runtime_id}-DEFAULT"
+  retention_in_days = var.log_retention_days
+}

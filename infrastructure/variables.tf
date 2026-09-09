@@ -89,7 +89,7 @@ variable "lambda_memory_mb" {
 }
 
 variable "log_retention_days" {
-  description = "CloudWatch Logs retention for the Lambda log group."
+  description = "CloudWatch Logs retention, applied to both the Lambda's group and the runtime's."
   type        = number
   default     = 14
 }
