@@ -275,13 +275,21 @@ against its own role, the provider and the state bucket.
 
 ### Checking it without deploying
 
-Everything below the model runs offline, without credentials.
-`test_tool_contract.py` drives the real `lambda_handler` on moto through the
-`(event, client_context)` pair the gateway would deliver. `test_agent.py` runs
-the shipped loop against a scripted Converse stream. `test_server.py` starts the
-real server on a real socket and speaks the AgentCore contract to it: `/ping`,
-`/invocations`, chunked SSE and an oversized body. `test_mcp.py` replaces
-`urlopen` and checks the framing, handshake and SigV4 headers.
+Two questions place a test. The directory says how much of the system it
+covers — `tests/unit/` substitutes everything below the code under test,
+`tests/integration_tests/` wires several real parts together, `tests/e2e/` would
+run a whole chat turn. The `aws` marker says whether it needs a deployed stack,
+and `addopts` carries `-m 'not aws'`, so the default run is the offline half and
+needs no credentials.
+
+Offline, that means: `test_agent.py` runs the shipped loop against a scripted
+Converse stream, and `test_mcp.py` replaces `urlopen` to check the framing,
+handshake and SigV4 headers — both unit, nothing real underneath.
+`test_tool_contract.py` and `test_tool_path.py` drive the real `lambda_handler`
+on moto through the `(event, client_context)` pair the gateway would deliver,
+and `test_server.py` starts the real server on a real socket and speaks the
+AgentCore contract to it — `/ping`, `/invocations`, chunked SSE and an oversized
+body — so both are integration: the wiring is the subject.
 `terraform init -backend=false && terraform validate` covers the HCL without
 reaching for the state bucket, which is what the commit hook does.
 
@@ -296,6 +304,34 @@ by a local dispatcher into the tool Lambda and memory by a dictionary. It calls
 the model for real, a few cents a conversation, and deploys nothing. It does not
 cover the MCP transport or AgentCore's session lifecycle. Set `USER_ID` to two
 different values across two runs to watch the isolation from outside.
+
+### Checking the deployed stack
+
+```bash
+AWS_PROFILE=... scripts/sync_env.sh
+AWS_PROFILE=... .venv/bin/pytest -m aws --no-cov
+```
+
+The `aws` marker is the one axis the default run gates on: not how much of the
+system a test covers, which is what the directory says, but whether it needs a
+deployed stack. `addopts` carries `-m 'not aws'`, so these never run by accident.
+
+`tests/integration_tests/test_gateway_deployed.py` goes through the real gateway
+with `GatewayClient` — the production MCP client, not a stand-in — and reads the
+table back with plain boto3, so nothing confirms itself. It covers what no
+offline test can: the gateway's own configuration, the tool schemas terraform
+expanded into it, the roles along the path, and the refusal of a call carrying
+no identity. It is deliberately *not* end-to-end: it starts at the gateway, so
+green here means everything under the model is wired up, not that the agent
+answers.
+
+`--no-cov` is not optional. `addopts` carries the 95% coverage gate, and a run
+that collects only these tests reports almost none of `src/`, failing on that
+rather than on anything real.
+
+Each test works in a throwaway `pytest-<uuid>` partition and deletes it
+afterwards, so this is safe to run beside a live conversation. With no `.env` or
+no credentials it skips rather than fails, naming what is missing.
 
 ## Not done here
 
