@@ -159,9 +159,10 @@ is a real input. The identity is out of the model's reach, so the worst case
 stays inside the attacker's own partition, and nothing exfiltrates. The same
 user's own data is still reachable.
 
-Logs carry ids, never item text. Retention is set on the Lambda's group, which
-Terraform owns, and expires after 14 days; the runtime's group is created by
-AgentCore itself on first start and this stack sets nothing on it. They are JSON: the
+Logs carry ids, never item text, and expire after 14 days — both groups. The
+runtime's is declared here rather than left to AgentCore, which creates it on
+first start and never expires anything; that one had to be imported once, since
+it already existed by the time it was noticed. They are JSON: the
 call sites pass context through `logging`'s `extra=`, which the standard library
 attaches to the record and then never prints, and `todo_logging` supplies the
 formatter that does. The table has SSE and point-in-time recovery, and there are
@@ -208,8 +209,7 @@ abandoned tab keeps costing until the session expires, which is what
 
 The tool plumbing rounds to zero: Lambda, DynamoDB and the gateway together are
 under 0.5% of a conversation. Idle cost is tool indexing plus a few KB in S3,
-about **$0.001/month** — plus whatever has collected in the runtime's own log
-group, which is the one thing here nothing expires.
+about **$0.001/month**.
 
 ## Running it
 
