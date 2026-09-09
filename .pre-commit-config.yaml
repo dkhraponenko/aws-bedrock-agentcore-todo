@@ -57,6 +57,7 @@ repos:
           - boto3>=1.35
           - moto[dynamodb]>=5.0
           - pytest>=8.3
+          - python-dotenv>=1.0
 
   # --- infrastructure ----------------------------------------------------------------
   # tflint and trivy are deliberately left out: both are separate binaries this

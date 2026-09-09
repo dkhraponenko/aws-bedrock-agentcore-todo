@@ -20,6 +20,10 @@ dev = [
   "pytest>=8.3",
   "pytest-cov>=6.0",
   "pytest-env>=1.1",
+  # scripts/chat.py reads the generated .env, and hand-rolling that parser is
+  # the small job that quietly gets quoting wrong. Nothing deployed imports
+  # it, so it sits here beside boto3 rather than in [project] dependencies.
+  "python-dotenv>=1.0",
   # Pinned exactly to the pre-commit hook's rev, not merely upper-bounded:
   # 0.15.22 already rewrites `# noqa:` suppressions into a syntax that rev
   # rejects, so a range wide enough to reach it fails the repo's own hooks.

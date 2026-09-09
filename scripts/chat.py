@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """Interactive smoke test: talk to the deployed agent and watch its tool calls.
 
-Reads AGENT_RUNTIME_ARN and AWS_REGION from the environment; `terraform output
-chat_command` prints a ready-to-run invocation.
+Configuration comes from .env, which scripts/sync_env.sh writes from the
+terraform outputs; an exported variable still wins over the file:
 
-    AWS_REGION=us-east-1 AGENT_RUNTIME_ARN=arn:aws:bedrock-agentcore:... python scripts/chat.py
+    USER_ID=bob python scripts/chat.py
 
-Type a request ("add a new item to the list, buy a milk"), and the dimmed lines
-show which tool the model picked — that is the part worth watching, especially
-on "delete buy a milk", where it has to call search_items before delete_item.
-
-Set USER_ID to two different values across two runs to see the isolation: the
-lists, and the conversation history, are per user.
+The dimmed lines show which tool the model picked, and two runs with different
+USER_ID values show the isolation.
 """
 
 from __future__ import annotations
@@ -20,11 +16,13 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
 from typing import Any, Protocol
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from dotenv import load_dotenv
 
 
 DIM = "\033[2m"
@@ -33,6 +31,13 @@ RESET = "\033[0m"
 
 RESULT_PREVIEW_CHARS = 300
 SSE_PREFIX = b"data:"
+
+# The repository root, one level up from scripts/, is where sync_env.sh writes.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+# What a cached ARN looks like once the runtime behind it was replaced. The
+# file is a snapshot, so the fix is to regenerate it.
+STALE_ARN_CODES = ("ResourceNotFoundException", "ValidationException")
 
 
 class AgentCoreRuntime(Protocol):
@@ -45,7 +50,7 @@ class AgentCoreRuntime(Protocol):
 def _require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        sys.exit(f"Missing required environment variable {name}. See `terraform output chat_command`.")
+        sys.exit(f"Missing required environment variable {name}. Run scripts/sync_env.sh to write .env.")
     return value
 
 
@@ -81,6 +86,11 @@ def converse(client: AgentCoreRuntime, runtime_arn: str, user_id: str, session_i
 
 
 def main() -> None:
+    # override=False: the environment beats the file, so `USER_ID=bob` needs no
+    # edit. A missing .env is not an error — the variables can be exported by
+    # hand, and _require_env names whichever is absent.
+    load_dotenv(ENV_FILE, override=False)
+
     runtime_arn = _require_env("AGENT_RUNTIME_ARN")
     region = os.environ.get("AWS_REGION", "us-east-1")
     user_id = os.environ.get("USER_ID", "cli-operator")
@@ -110,6 +120,8 @@ def main() -> None:
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "Unknown")
             print(f"\n{code}: {e}")
+            if code in STALE_ARN_CODES:
+                print(f"{DIM}     .env may predate the last apply; rerun scripts/sync_env.sh{RESET}")
 
 
 if __name__ == "__main__":
