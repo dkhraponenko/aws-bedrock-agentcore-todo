@@ -121,9 +121,17 @@ there may be more.
 text it returns — `<thinking>` arrives as ordinary content, split across
 whatever deltas the stream happens to use — so the loop filters it out of the
 stream rather than in the client. That keeps the reasoning off the screen, out
-of the stored history, and out of the tokens every later turn is billed for.
-Tool calls are skipped too, since Converse wants every `toolUse` answered by a
-matching `toolResult` in the same sequence. The question is written before the model runs: a turn can die halfway
+of what memory stores, and out of the tokens every later turn is billed for.
+
+It is filtered on the way out and not on the way in: within a turn, the
+assistant message replayed to the model keeps the model's own words whole.
+Cutting the reasoning out of that as well cost a `delete_item` — having read its
+own turn as having said nothing, the model concluded it had finished and
+reported a deletion it never performed. The reasoning is where it writes down
+what it still has to do, so it is the one reader the filter must not serve.
+
+Tool calls are skipped in memory too, since Converse wants every `toolUse`
+answered by a matching `toolResult` in the same sequence. The question is written before the model runs: a turn can die halfway
 through, and the question is the only part that cannot be reconstructed. Reading
 history back fills in an answer that never arrived, because Converse rejects two
 user messages in a row.
@@ -329,6 +337,24 @@ answers.
 that collects only these tests reports almost none of `src/`, failing on that
 rather than on anything real.
 
+`tests/e2e/test_conversation.py` is the other half, and the one nothing can
+stand in for: it starts where the operator starts, driving `stream_turn` out of
+`scripts/chat.py` — the same invocation and the same frame parsing, not a second
+copy — and finishes by reading DynamoDB. Every deployment failure this project
+has had lived in that gap: an entrypoint the platform would not launch, a system
+prompt with a newline in it, a missing boto3, a client with no region. The model
+is not deterministic, so nothing asserts on its prose; what is asserted is which
+tools it chose, in what order, and what is in the table afterwards — plus the
+two things the prompt forbids and the model has been caught doing, a leaked
+`<thinking>` block and an `item_id` quoted back at the user.
+
+The directory picks between the two:
+
+```bash
+AWS_PROFILE=... .venv/bin/pytest tests/integration_tests -m aws --no-cov  # free
+AWS_PROFILE=... .venv/bin/pytest tests/e2e -m aws --no-cov                # cents
+```
+
 Each test works in a throwaway `pytest-<uuid>` partition and deletes it
 afterwards, so this is safe to run beside a live conversation. With no `.env` or
 no credentials it skips rather than fails, naming what is missing.
@@ -343,6 +369,11 @@ no credentials it skips rather than fails, naming what is missing.
   history and no recall across conversations.
 - **Not load-tested.** One vCPU and the default concurrency were never measured;
   the cost model assumes a session shape rather than an observed one.
+- **Priority is write-once.** `add_item` takes one and `update_item` has no
+  field for it, so "make that one priority 1" cannot be honoured. It is not
+  refused gracefully either: asked to do it anyway, Nova emits a malformed tool
+  call and the turn dies with `modelStreamErrorException`. Closing the gap means
+  a field in `tools.json`, in `service.update_item` and in `store.update`.
 
 ## License
 
