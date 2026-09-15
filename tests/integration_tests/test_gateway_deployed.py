@@ -89,9 +89,21 @@ def test_search_then_delete_removes_the_row(
 
 
 def test_a_call_carrying_no_identity_is_refused(call: Callable[..., dict[str, Any]]) -> None:
+    """The refusal is the Lambda failing, not a tool returning an error result.
+
+    service.py lets `MissingIdentityError` propagate on purpose: a missing
+    identity is a plumbing failure, and folding it into an ordinary error result
+    would hide it from the function's error metric. The gateway turns a failed
+    Lambda into a generic message of its own, so what arrives here is "An
+    internal error occurred. Please retry later." and not anything naming
+    `user_id` — which is also the right amount to tell a caller that supplied
+    none. Asserting on that wording would be asserting on AWS's, so what is
+    checked is that the call was refused and created nothing.
+    """
     result = call("add_item", None, text="should never reach the table")
 
-    assert USER_ID_KEY in result["error"]
+    assert "error" in result
+    assert "created" not in result
 
 
 def test_one_users_items_are_invisible_to_another(
