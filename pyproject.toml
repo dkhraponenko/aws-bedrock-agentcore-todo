@@ -110,7 +110,13 @@ pythonpath = ["src", "."]
 testpaths = ["tests"]
 # --cov here rather than only in CI: the coverage gate is part of "the tests
 # pass", and a threshold nobody runs locally is a threshold that drifts.
-addopts = "-m 'not aws' --strict-markers --cov"
+#
+# --cov must not be the last token. pytest concatenates addopts with the command
+# line, --cov takes an optional value, and as the final token it swallowed the
+# path argument that followed: `pytest tests/unit/test_agent.py` became
+# `--cov=tests/unit/test_agent.py` with no path left, so testpaths took over and
+# the whole suite ran while coverage silently measured the wrong thing.
+addopts = "--cov --strict-markers -m 'not aws'"
 # One marker, and it names the axis it gates: not how much of the system a test
 # covers - the directory says that - but whether it needs a deployed stack,
 # credentials and a synced .env. Both integration_tests/test_gateway_deployed.py
