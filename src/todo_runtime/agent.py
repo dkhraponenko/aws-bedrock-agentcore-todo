@@ -144,24 +144,32 @@ class _StreamedMessage:
             delta = delta_event["delta"]
             if (text := delta.get("text")) is not None:
                 self._text_index = index
+                # Stored raw, filtered only on the way out. The history this
+                # builds is replayed to the model as its own turn, and the
+                # reasoning is where it wrote down what it had still to do:
+                # strip it and, after a search, the model reads itself as
+                # having said nothing, decides it has finished, and reports a
+                # delete it never performed.
+                self._text.setdefault(index, []).append(text)
                 if visible := self._thinking.feed(text):
-                    self._text.setdefault(index, []).append(visible)
                     yield {"type": "text", "text": visible}
             elif (tool_delta := delta.get("toolUse")) and index in self._tools:
                 self._tools[index]["fragments"].append(tool_delta.get("input", ""))
 
         elif stop := event.get("messageStop"):
             self.stop_reason = stop["stopReason"]
-            # Held-back text is only known to be text once no more deltas can
-            # turn it into a tag, and that is here.
+            # Only the visible side needs releasing here; the raw text went
+            # into `_text` as it arrived.
             if remainder := self._thinking.flush():
-                self._text.setdefault(self._text_index, []).append(remainder)
                 yield {"type": "text", "text": remainder}
 
     @property
     def content(self) -> list[dict[str, Any]]:
         """The assembled content blocks, in the order the model emitted them."""
-        blocks: dict[int, dict[str, Any]] = {index: {"text": "".join(parts)} for index, parts in self._text.items()}
+        # An empty text block is rejected by the API.
+        blocks: dict[int, dict[str, Any]] = {
+            index: {"text": joined} for index, parts in self._text.items() if (joined := "".join(parts))
+        }
         for index, tool in self._tools.items():
             blocks[index] = {
                 "toolUse": {

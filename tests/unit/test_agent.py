@@ -163,6 +163,37 @@ def test_the_models_reasoning_never_reaches_the_user(
     assert stored[-1] == {"role": "ASSISTANT", "content": {"text": "Added."}}
 
 
+def test_the_reasoning_stays_in_the_history_the_model_is_replayed(
+    memory_client: DictMemoryClient,
+) -> None:
+    """Hiding the reasoning from the user must not hide it from the model.
+
+    The reasoning is where the model writes down what it has decided to do
+    next. Strip it from the turn that gets replayed and, after a search, it
+    reads its own turn as having said nothing, concludes it is finished, and
+    answers "I deleted the task" without ever calling delete_item.
+    """
+    reasoning = "<thinking>Search first, then delete.</thinking>\n"
+    thinking_then_tool: list[dict[str, Any]] = [
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": reasoning}}},
+        {"contentBlockStart": {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tu-1", "name": TOOL_NAME}}}},
+        {"contentBlockDelta": {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"query": "milk"}'}}}},
+        {"messageStop": {"stopReason": "tool_use"}},
+    ]
+    bedrock = FakeBedrock(thinking_then_tool, text_stream("Deleted."))
+    agent = build_agent(bedrock, FakeGateway(), memory_client)
+
+    events = list(agent.run("alice", "session-1", "delete buy a milk"))
+
+    # The user sees the answer and none of the reasoning, as before. The newline
+    # that followed the closing tag is outside it, so it is text and survives.
+    assert "".join(event["text"] for event in events if event["type"] == "text") == "\nDeleted."
+
+    # And the model gets its own turn back whole, reasoning included.
+    replayed = next(m for m in bedrock.requests[1]["messages"] if m["role"] == "assistant")
+    assert replayed["content"][0] == {"text": reasoning}
+
+
 def test_text_that_only_resembles_a_tag_is_still_shown(memory_client: DictMemoryClient) -> None:
     """The held-back tail has to be released once no delta can complete a tag."""
     agent = build_agent(FakeBedrock(deltas("Done, 2 items <", "3 left.")), FakeGateway(), memory_client)
