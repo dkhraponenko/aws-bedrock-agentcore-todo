@@ -31,9 +31,12 @@ logger = logging.getLogger(__name__)
 HOST = "0.0.0.0"  # noqa: S104
 PORT = 8080
 
-# A turn is one prompt. Anything of this size is a mistake or an attempt to
-# exhaust the instance's memory, and reading it before deciding that is the
-# thing worth avoiding.
+# Named because two places have to agree on it: the route, and the access log
+# that deliberately says nothing about it.
+PING_PATH = "/ping"
+
+# A turn is one prompt, so anything this size is a mistake or an attack — and
+# reading it before deciding that is what to avoid.
 MAX_PAYLOAD_BYTES = 256 * 1024
 
 
@@ -48,7 +51,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Answer the health check; anything else is not a path this serves."""
-        if self.path.split("?")[0] != "/ping":
+        if self.path.split("?")[0] != PING_PATH:
             self._respond(HTTPStatus.NOT_FOUND, {"message": "Not found."})
             return
 
@@ -78,6 +81,18 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         self._stream(payload)
+
+    @override
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        """Log every request except a health check that passed.
+
+        AgentCore polls /ping twice a second: some 170,000 lines a day, in a
+        group billed by the gigabyte. A probe that did not return 200 is still
+        logged, since that is what someone would come looking for.
+        """
+        if self.path.split("?")[0] == PING_PATH and code == HTTPStatus.OK:
+            return
+        super().log_request(code, size)
 
     @override
     def log_message(self, format: str, *args: Any) -> None:

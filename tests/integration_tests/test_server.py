@@ -157,12 +157,20 @@ def test_an_oversized_payload_is_refused_before_it_is_read(port: int, turn: Reco
     assert turn.payloads == []
 
 
-def test_the_access_log_goes_through_logging(port: int, caplog: pytest.LogCaptureFixture) -> None:
-    """Anything written straight to stderr arrives in CloudWatch unformatted."""
+def test_a_health_check_that_passed_is_not_logged(port: int, caplog: pytest.LogCaptureFixture) -> None:
+    """Twice a second for the life of the runtime, and none of it is news."""
     with caplog.at_level("INFO", logger="todo_runtime.server"):
         call(port, "GET", "/ping")
 
-    assert any("/ping" in record.getMessage() for record in caplog.records)
+    assert caplog.records == []
+
+
+def test_the_access_log_goes_through_logging(port: int, caplog: pytest.LogCaptureFixture) -> None:
+    """Anything written straight to stderr arrives in CloudWatch unformatted."""
+    with caplog.at_level("INFO", logger="todo_runtime.server"):
+        call(port, "GET", "/nope")
+
+    assert any("/nope" in record.getMessage() for record in caplog.records)
 
 
 def test_serve_binds_the_documented_address() -> None:
