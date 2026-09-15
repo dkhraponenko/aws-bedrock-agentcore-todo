@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any
 import boto3
 import pytest
 from boto3.dynamodb.conditions import Key
+from botocore.config import Config
 from dotenv import dotenv_values
 from moto import mock_aws
+from scripts.chat import stream_turn
 
 from todo_agent.models import TOOL_NAME_KEY, TOOL_NAME_SEPARATOR, USER_ID_KEY
 from todo_agent.service import TodoService
@@ -156,6 +158,7 @@ class DeployedStack:
     region: str
     gateway_url: str
     table_name: str
+    runtime_arn: str
 
     @classmethod
     def from_env_file(cls, path: Path) -> DeployedStack:
@@ -172,11 +175,17 @@ class DeployedStack:
             region=values.get("AWS_REGION") or "",
             gateway_url=values.get("GATEWAY_URL") or "",
             table_name=values.get("DYNAMODB_TABLE_NAME") or "",
+            runtime_arn=values.get("AGENT_RUNTIME_ARN") or "",
         )
 
     def missing(self) -> list[str]:
         """Return the names of the settings that are absent or empty."""
-        present = {"AWS_REGION": self.region, "GATEWAY_URL": self.gateway_url, "DYNAMODB_TABLE_NAME": self.table_name}
+        present = {
+            "AWS_REGION": self.region,
+            "GATEWAY_URL": self.gateway_url,
+            "DYNAMODB_TABLE_NAME": self.table_name,
+            "AGENT_RUNTIME_ARN": self.runtime_arn,
+        }
         return [name for name, value in present.items() if not value]
 
 
@@ -276,3 +285,70 @@ def call(gateway: GatewayClient, tool_names: dict[str, str]) -> Callable[..., di
         return gateway.call_tool(tool_names[tool], payload)
 
     return _call
+
+
+# A turn that calls tools runs several model round trips, and the runtime holds
+# the connection open for all of them. scripts/chat.py waits exactly this long.
+TURN_READ_TIMEOUT = 120
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One conversation turn, collected off the wire instead of printed."""
+
+    events: list[dict[str, Any]]
+
+    @property
+    def text(self) -> str:
+        """Everything the agent said, in order."""
+        return "".join(str(event.get("text", "")) for event in self.events if event.get("type") == "text")
+
+    @property
+    def tools(self) -> list[str]:
+        """The tools the model chose, bare-named, in the order it chose them."""
+        return [
+            str(event["name"]).rpartition(TOOL_NAME_SEPARATOR)[2]
+            for event in self.events
+            if event.get("type") == "tool_use"
+        ]
+
+    @property
+    def errors(self) -> list[str]:
+        """Error frames the runtime sent. Empty is what a working turn looks like."""
+        return [str(event.get("message", "")) for event in self.events if event.get("type") == "error"]
+
+    @property
+    def completed(self) -> bool:
+        """Whether the stream ended the way the contract says it should."""
+        return bool(self.events) and self.events[-1].get("type") == "done"
+
+
+@pytest.fixture(scope="session")
+def agentcore(deployed: DeployedStack, aws_session: boto3.Session) -> Any:
+    """A bedrock-agentcore client configured the way scripts/chat.py configures its own."""
+    return aws_session.client(
+        "bedrock-agentcore",
+        region_name=deployed.region,
+        config=Config(connect_timeout=5, read_timeout=TURN_READ_TIMEOUT, retries={"max_attempts": 2}),
+    )
+
+
+@pytest.fixture
+def conversation(agentcore: Any, deployed: DeployedStack, user_id: str) -> Callable[[str], Turn]:
+    """Speak to the deployed agent as one user, in one session, turn after turn.
+
+    Invocation and frame parsing come from scripts/chat.py rather than from a
+    copy written here: the client is part of what these tests are for, and a
+    second implementation could be wrong in its own way and still agree with
+    itself.
+
+    The session id is a uuid because AgentCore requires at least 33 characters
+    for one, and a shorter label is refused with a validation error that says
+    nothing about the turn.
+    """
+    session_id = str(uuid.uuid4())
+
+    def _say(prompt: str) -> Turn:
+        return Turn(list(stream_turn(agentcore, deployed.runtime_arn, user_id, session_id, prompt)))
+
+    return _say

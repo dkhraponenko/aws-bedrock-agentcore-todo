@@ -59,8 +59,16 @@ env_file = Path(os.environ["ENV_FILE"])
 outputs = json.loads(os.environ["OUTPUTS_JSON"])
 
 missing = sorted(name for name in FROM_TERRAFORM.values() if name not in outputs)
+if missing and not outputs:
+    raise SystemExit("terraform has no outputs at all; the stack has not been applied")
 if missing:
-    raise SystemExit(f"terraform has no output {', '.join(missing)}; has the stack been applied?")
+    # The distinction matters: outputs are recomputed only by an apply, so a
+    # name added to outputs.tf since the last one is absent from a stack that
+    # is otherwise deployed and healthy.
+    raise SystemExit(
+        f"terraform state has no output {', '.join(missing)} - its outputs predate "
+        "the current configuration. Run an apply."
+    )
 
 # Parsing this file back is parsing our own output - plain KEY=value, no
 # quoting, no continuations - which is why a few lines are enough here. Reading

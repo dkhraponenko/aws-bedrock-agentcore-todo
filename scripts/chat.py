@@ -17,12 +17,16 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 DIM = "\033[2m"
@@ -69,8 +73,19 @@ def _render(event: dict[str, Any]) -> None:
         print(f"\n[error] {event.get('message', '')}")
 
 
-def converse(client: AgentCoreRuntime, runtime_arn: str, user_id: str, session_id: str, prompt: str) -> None:
-    """Send one turn and render the agent's stream as it arrives."""
+def stream_turn(
+    client: AgentCoreRuntime,
+    runtime_arn: str,
+    user_id: str,
+    session_id: str,
+    prompt: str,
+) -> Iterator[dict[str, Any]]:
+    """Send one turn and yield its events, decoded out of their SSE frames.
+
+    Split out from the rendering below so tests/e2e drives the same invocation
+    and the same frame parsing the operator does, not a second copy of it.
+    `user_id` is who the turn acts as; `session_id` is what gives it memory.
+    """
     response = client.invoke_agent_runtime(
         agentRuntimeArn=runtime_arn,
         runtimeSessionId=session_id,
@@ -81,7 +96,13 @@ def converse(client: AgentCoreRuntime, runtime_arn: str, user_id: str, session_i
 
     for line in response["response"].iter_lines():
         if line.startswith(SSE_PREFIX):
-            _render(json.loads(line[len(SSE_PREFIX) :].strip()))
+            yield json.loads(line[len(SSE_PREFIX) :].strip())
+
+
+def converse(client: AgentCoreRuntime, runtime_arn: str, user_id: str, session_id: str, prompt: str) -> None:
+    """Send one turn and render the agent's stream as it arrives."""
+    for event in stream_turn(client, runtime_arn, user_id, session_id, prompt):
+        _render(event)
     print()
 
 

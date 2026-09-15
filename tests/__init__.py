@@ -10,8 +10,10 @@ something exist:
                         socket, the real lambda_handler - plus, marked `aws`,
                         the deployed gateway and the Lambda behind it
     e2e/                the whole path, from a chat turn to the table, model
-                        included; always `aws`. Not written yet.
+                        included; always `aws`
 
 `addopts` carries `-m 'not aws'`, so a default run is the offline half of that
-table and needs no credentials at all.
+table and needs no credentials at all. The directory then picks between the two
+deployed halves: `pytest tests/integration_tests -m aws` is deterministic and
+free, `pytest tests/e2e -m aws` calls the model and costs cents.
 """
