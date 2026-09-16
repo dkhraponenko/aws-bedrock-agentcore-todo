@@ -355,6 +355,10 @@ AWS_PROFILE=... .venv/bin/pytest tests/integration_tests -m aws --no-cov  # free
 AWS_PROFILE=... .venv/bin/pytest tests/e2e -m aws --no-cov                # cents
 ```
 
+`AWS_PROFILE=personal` in `.env` does the same job as the prefix for all of
+these, `sync_env.sh` and `chat.py` included, and a regenerate keeps it. An
+exported `AWS_PROFILE` still takes precedence over the file.
+
 Each test works in a throwaway `pytest-<uuid>` partition and deletes it
 afterwards, so this is safe to run beside a live conversation. With no `.env` or
 no credentials it skips rather than fails, naming what is missing.
