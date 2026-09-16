@@ -159,6 +159,8 @@ class DeployedStack:
     gateway_url: str
     table_name: str
     runtime_arn: str
+    # Optional, so not part of missing(): the shell may supply it instead.
+    profile: str | None = None
 
     @classmethod
     def from_env_file(cls, path: Path) -> DeployedStack:
@@ -176,6 +178,7 @@ class DeployedStack:
             gateway_url=values.get("GATEWAY_URL") or "",
             table_name=values.get("DYNAMODB_TABLE_NAME") or "",
             runtime_arn=values.get("AGENT_RUNTIME_ARN") or "",
+            profile=values.get("AWS_PROFILE") or None,
         )
 
     def missing(self) -> list[str]:
@@ -203,10 +206,17 @@ def deployed() -> DeployedStack:
 
 @pytest.fixture(scope="session")
 def aws_session(deployed: DeployedStack) -> boto3.Session:
-    """A boto3 session with real credentials, or a skip."""
-    session = boto3.Session(region_name=deployed.region)
+    """A boto3 session with real credentials, or a skip.
+
+    The profile named in .env is passed explicitly, because this process never
+    loads that file into its environment. The shell still wins, as it does for
+    scripts/chat.py: boto3 reads an exported AWS_PROFILE on its own, so the
+    file's value is only used when there is none.
+    """
+    profile = None if os.environ.get("AWS_PROFILE") else deployed.profile
+    session = boto3.Session(profile_name=profile, region_name=deployed.region)
     if session.get_credentials() is None:
-        pytest.skip("no AWS credentials; export AWS_PROFILE")
+        pytest.skip("no AWS credentials; export AWS_PROFILE or set it in .env")
     return session
 
 

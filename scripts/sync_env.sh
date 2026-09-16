@@ -14,6 +14,16 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+
+# A profile kept in .env serves this script as well, so setting it there once is
+# enough. An exported AWS_PROFILE still wins, as it does everywhere else.
+if [ -z "${AWS_PROFILE:-}" ] && [ -f "$root/.env" ]; then
+  profile=$(sed -n 's/^AWS_PROFILE=//p' "$root/.env" | tail -n 1)
+  if [ -n "$profile" ]; then
+    export AWS_PROFILE="$profile"
+  fi
+fi
+
 cd "$root/infrastructure"
 
 if [ ! -d .terraform ]; then
