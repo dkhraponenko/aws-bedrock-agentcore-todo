@@ -125,7 +125,6 @@ class _StreamedMessage:
         self._text: dict[int, list[str]] = {}
         self._tools: dict[int, dict[str, Any]] = {}
         self._thinking = _ThinkingFilter()
-        self._text_index = 0
         self.stop_reason = ""
 
     def consume(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -143,13 +142,9 @@ class _StreamedMessage:
             index = delta_event["contentBlockIndex"]
             delta = delta_event["delta"]
             if (text := delta.get("text")) is not None:
-                self._text_index = index
-                # Stored raw, filtered only on the way out. The history this
-                # builds is replayed to the model as its own turn, and the
-                # reasoning is where it wrote down what it had still to do:
-                # strip it and, after a search, the model reads itself as
-                # having said nothing, decides it has finished, and reports a
-                # delete it never performed.
+                # Stored raw, filtered only on the way out: the model is
+                # replayed its own turn, and stripping the reasoning made it
+                # report a delete it never performed.
                 self._text.setdefault(index, []).append(text)
                 if visible := self._thinking.feed(text):
                     yield {"type": "text", "text": visible}
