@@ -72,7 +72,7 @@ jobs:
           # every process they start.
           persist-credentials: false
 
-      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           # A secret rather than a variable: it carries the account id, and
           # terraform prints ARNs into logs that go public with the repository.
