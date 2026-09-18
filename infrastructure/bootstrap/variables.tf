@@ -29,9 +29,14 @@ variable "github_owner_id" {
 }
 
 variable "github_repository_id" {
-  description = "Numeric id of the repository, read from the subject claim of a real run."
+  description = <<-EOT
+    Numeric id of the repository, read from the subject claim of a real run: a
+    failed AssumeRoleWithWebIdentity in CloudTrail carries it in `userName`.
+    It changes when the repository is deleted and recreated under the same name,
+    and STS then refuses without saying which claim failed.
+  EOT
   type        = string
-  default     = "1356378108"
+  default     = "1376290567"
 }
 
 variable "github_branch" {
