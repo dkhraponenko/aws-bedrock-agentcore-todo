@@ -74,7 +74,7 @@ jobs:
       # tflint and trivy are kept out of .pre-commit-config.yaml deliberately:
       # both are separate binaries, and needing them would make a fresh clone
       # fail to commit. That constraint does not exist on a runner.
-      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
       - name: tflint
         run: tflint --recursive --chdir=infrastructure
 
